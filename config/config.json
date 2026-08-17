@@ -1,0 +1,38 @@
+{
+  "data_name": "thorax",
+  "data_roots": {
+    "thorax": [
+      "E:\\workspace\\LightningRecon\\data\\thorax_fast",
+      "~/autodl-tmp/thorax"
+    ],
+    "head": [
+      "E:\\workspace\\LightningRecon\\data\\head_fast",
+      "~/autodl-tmp/head"
+    ]
+  },
+  "split": "train",
+  "model": {
+    "in_channels": 6,
+    "out_channels": 1,
+    "base_channels": 64,
+    "num_down": 4,
+    "num_regions": 4
+  },
+  "training": {
+    "epochs": 300,
+    "lr": 0.001,
+    "rotors_per_case": 6,
+    "use_cos_sin": true,
+    "amp": true,
+    "seed": 0,
+    "zscore_max_cases": 16
+  },
+  "loss": {
+    "ssim_window": 11,
+    "val_range": 255.0
+  },
+  "logging": {
+    "log_every_steps": 50,
+    "checkpoint_every_epochs": 10
+  }
+}

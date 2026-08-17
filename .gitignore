@@ -1,0 +1,13 @@
+# 忽略日志目录
+/logs/
+
+# 忽略 VS Code 配置文件目录
+/.vscode/
+
+# 忽略临时文件目录
+/tmp/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

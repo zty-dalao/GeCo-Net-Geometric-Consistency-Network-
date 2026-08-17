@@ -141,8 +141,11 @@ cos(β - α) - 1 ,  sin(β - α)
 
 ### 7.2 损失
 
-- 当前仅用 **`1 - SSIM`**（VGG 感知损失暂缓）；
-- SSIM 在**原始值域**（0~255）上计算，`L = 255`（模型已做输入 z-score + 输出反归一化）。
+- **必选**：`1 - SSIM + α·L_VGG`（VGG19 感知损失，论文 Eq.1；`α` 见 config `loss.alpha`）；
+- **可选**：视图选择/旋转一致性损失（`--consistency`，权重 `loss.lambda_consistency`）；
+- 全部在**原始值域**（0~255）上计算，`L = 255`（模型已做输入 z-score + 输出反归一化）。
+
+> ⚠️ 一致性损失会让每个目标多一次前向（两张计算图），显存近乎翻倍；320×1280 下建议先 resize 到 512×384 再开启。
 
 ### 7.3 运行命令
 
@@ -160,6 +163,19 @@ python src/train_interpolation.py --data_name head --version v1 --final_view 6
 # 冒烟测试：只跑 3 步
 python src/train_interpolation.py --version v1 --final_view 6 --max_steps 3 --zscore_max_cases 2
 
+# 指定训练轮数
+python src/train_interpolation.py --version v1 --final_view 6 --epochs 500
+
+# 从最新断点继续训练（用同一个 --version / --data_name / --final_view）
+python src/train_interpolation.py --version v1 --final_view 6 --resume
+
+# 开启一致性损失（可选）
+python src/train_interpolation.py --version v1 --final_view 6 --consistency --lambda_consistency 1.0
+
+# 推理：给定目标角度预测投影
+python src/inference.py --checkpoint logs/v1_thorax_fv6/checkpoints/interpolation_epoch10.pt \
+    --case 2026-06-04_065713 --target_angle 30.5
+
 # 查看 TensorBoard 日志
 tensorboard --logdir logs
 ```
@@ -172,7 +188,11 @@ tensorboard --logdir logs
 | `--data_name thorax` | 数据/器官名（thorax、head…），决定数据路径与日志目录名 |
 | `--final_view 6` | 输入投影数（覆盖 config 的 `model.in_channels`） |
 | `--amp` / `--no_amp` | 开 / 关混合精度（默认读 config 的 `training.amp`） |
+| `--alpha` | VGG 感知损失权重（默认读 config 的 `loss.alpha`） |
+| `--consistency` | 开启可选的一致性损失 |
+| `--lambda_consistency` | 一致性损失权重（默认读 config 的 `loss.lambda_consistency`） |
 | `--epochs` | 覆盖训练轮数 |
+| `--resume` | 从 run 的 checkpoints 目录里加载最新断点继续训练 |
 | `--max_steps` | 只跑 N 步（冒烟测试） |
 | `--max_cases` | 每 epoch 限制病例数（冒烟测试） |
 | `--zscore_max_cases` | z-score 统计量扫描的病例数 |
@@ -186,7 +206,27 @@ tensorboard --logdir logs
 | `data_roots` | 各数据名对应的**候选路径列表**（自动取第一个存在的，支持 `~` 展开） |
 | `model` | `in_channels`（源投影数）、`base_channels`、`num_down`、`num_regions` |
 | `training` | `epochs`、`lr`、`rotors_per_case`、`use_cos_sin`、`amp`、`seed`、`zscore_max_cases` |
-| `loss` | `ssim_window`、`val_range`（=255） |
+| `loss` | `ssim_window`、`val_range`（=255）、`alpha`、`lambda_consistency`、`vgg_feature_layers`、`vgg_weights` |
 | `logging` | `log_every_steps`、`checkpoint_every_epochs` |
 
 > 训练与推理统一从 `config/config.json` 读取 `data_name` / `data_roots` 等配置。
+
+### 7.5 推理
+
+`src/inference.py`：加载 checkpoint（模型权重 + z-score 统计量 + config），对指定病例和目标角度做插值预测，输出 `.npy` / `.png`。
+
+```bash
+conda activate deeplearning
+python src/inference.py \
+    --checkpoint logs/v1_thorax_fv6/checkpoints/interpolation_epoch10.pt \
+    --case 2026-06-04_065713 \
+    --target_angle 30.5
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--checkpoint` | 训练保存的 `.pt` 文件路径 |
+| `--case` | 病例 id |
+| `--target_angle` | 目标投影角度（度） |
+| `--num_inputs` | 源视角数（默认取 checkpoint 的 `final_view`） |
+| `--out_dir` | 输出目录（默认 `inference_results/`） |

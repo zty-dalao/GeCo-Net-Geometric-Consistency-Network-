@@ -8,7 +8,8 @@ Sampling strategy (per case, per epoch):
       consecutive rotor views (=> ``num_inputs`` targets per rotor);
     * total = ``rotors_per_case * num_inputs`` steps per case per epoch.
 
-Loss: ``1 - SSIM`` only (VGG perceptual loss omitted for now).
+Loss: ``1 - SSIM + alpha * L_VGG`` (VGG19 perceptual loss); the view-selection
+consistency loss is optional (--consistency).
 
 Logging: TensorBoard.  Configuration is read from ``config.json``.
 """
@@ -17,14 +18,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from fig3 import InterpolationModel
+from loss import InterpolationLoss, VGGPerceptualLoss, consistency_loss
 from dataloader_projection import (
     ProjectionInterpolationDataset,
     _wrap_pi,
@@ -38,44 +38,6 @@ except ImportError:  # pragma: no cover
     SummaryWriter = None
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-# --------------------------------------------------------------------------- SSIM
-def _gaussian(window_size: int, sigma: float) -> torch.Tensor:
-    g = torch.tensor(
-        [math.exp(-((x - window_size // 2) ** 2) / (2 * sigma ** 2))
-         for x in range(window_size)],
-        dtype=torch.float32,
-    )
-    return g / g.sum()
-
-
-def _create_window(window_size: int, channels: int) -> torch.Tensor:
-    _1d = _gaussian(window_size, 1.5).unsqueeze(1)
-    _2d = _1d.mm(_1d.t()).unsqueeze(0).unsqueeze(0)
-    return _2d.expand(channels, 1, window_size, window_size).contiguous()
-
-
-def ssim(x: torch.Tensor, y: torch.Tensor, window_size: int = 11,
-         val_range: float = 255.0) -> torch.Tensor:
-    """Mean structural similarity (0~1), differentiable."""
-    channels = x.size(1)
-    window = _create_window(window_size, channels).to(x.device).to(x.dtype)
-    pad = window_size // 2
-
-    mu1 = F.conv2d(x, window, padding=pad, groups=channels)
-    mu2 = F.conv2d(y, window, padding=pad, groups=channels)
-    mu1_sq, mu2_sq, mu1_mu2 = mu1 ** 2, mu2 ** 2, mu1 * mu2
-    sigma1_sq = F.conv2d(x * x, window, padding=pad, groups=channels) - mu1_sq
-    sigma2_sq = F.conv2d(y * y, window, padding=pad, groups=channels) - mu2_sq
-    sigma12 = F.conv2d(x * y, window, padding=pad, groups=channels) - mu1_mu2
-
-    c1 = (0.01 * val_range) ** 2
-    c2 = (0.03 * val_range) ** 2
-    ssim_map = ((2 * mu1_mu2 + c1) * (2 * sigma12 + c2)) / (
-        (mu1_sq + mu2_sq + c1) * (sigma1_sq + sigma2_sq + c2)
-    )
-    return ssim_map.mean()
 
 
 def load_config(path: str) -> dict:
@@ -108,6 +70,23 @@ def _gib(nbytes: int) -> float:
     return nbytes / (1024 ** 3)
 
 
+def nearest_source_idx(angles: np.ndarray, target_idx: int, num_inputs: int) -> np.ndarray:
+    """Nearest ``num_inputs`` views around ``target_idx`` (a local view set)."""
+    d = np.abs(_wrap_pi(angles - angles[target_idx]))
+    d[target_idx] = np.inf
+    return np.argsort(d)[:num_inputs]
+
+
+def find_latest_checkpoint(ckpt_dir: str):
+    """Return the path of the newest ``interpolation_epoch*.pt`` in ``ckpt_dir``."""
+    files = [f for f in os.listdir(ckpt_dir)
+             if f.startswith("interpolation_epoch") and f.endswith(".pt")]
+    if not files:
+        return None
+    files.sort(key=lambda f: int(f.split("epoch")[1].split(".")[0]))
+    return os.path.join(ckpt_dir, files[-1])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train the projection interpolation model (Fig. 3).")
     parser.add_argument("--config",
@@ -121,7 +100,15 @@ def main() -> None:
     parser.add_argument("--amp", action="store_true", default=None,
                         help="enable mixed precision")
     parser.add_argument("--no_amp", action="store_true", help="disable mixed precision")
+    parser.add_argument("--alpha", type=float, default=None,
+                        help="VGG perceptual loss weight (default from config loss.alpha)")
+    parser.add_argument("--consistency", action="store_true",
+                        help="enable the view-selection consistency loss (optional)")
+    parser.add_argument("--lambda_consistency", type=float, default=None,
+                        help="consistency loss weight (default from config loss.lambda_consistency)")
     parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--resume", action="store_true",
+                        help="resume from the latest checkpoint in the run's checkpoints dir")
     parser.add_argument("--max_steps", type=int, default=None,
                         help="stop after N optimizer steps (smoke test)")
     parser.add_argument("--max_cases", type=int, default=None,
@@ -158,12 +145,34 @@ def main() -> None:
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
 
-    # ---------------- dataset + z-score stats ----------------
+    # ---------------- run dirs (before resume so we can locate checkpoints) ----------------
+    run_dir = os.path.join(args.log_root, f"{args.version}_{data_name}_fv{num_inputs}")
+    os.makedirs(run_dir, exist_ok=True)
+    ckpt_dir = os.path.join(run_dir, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
+
     ds = ProjectionInterpolationDataset(root, split=cfg.get("split", "train"),
                                         num_inputs=num_inputs)
-    zmax = args.zscore_max_cases if args.zscore_max_cases is not None else train_cfg.get("zscore_max_cases", 16)
-    mean, std = compute_zscore_stats(ds, max_cases=zmax)
-    print(f"[z-score] mean={mean:.4f} std={std:.4f}")
+
+    # ---------------- resume or fresh z-score stats ----------------
+    start_epoch = 1
+    global_step = 0
+    resume_ckpt = None
+    if args.resume:
+        ckpt_path = find_latest_checkpoint(ckpt_dir)
+        if ckpt_path is None:
+            raise FileNotFoundError(f"no checkpoint found to resume in {ckpt_dir}")
+        resume_ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        mean = float(resume_ckpt["zscore_mean"])
+        std = float(resume_ckpt["zscore_std"])
+        start_epoch = int(resume_ckpt.get("epoch", 0)) + 1
+        global_step = int(resume_ckpt.get("global_step", 0))
+        print(f"[resume] {os.path.basename(ckpt_path)} | start_epoch={start_epoch} "
+              f"global_step={global_step} | z-score mean={mean:.4f} std={std:.4f}")
+    else:
+        zmax = args.zscore_max_cases if args.zscore_max_cases is not None else train_cfg.get("zscore_max_cases", 16)
+        mean, std = compute_zscore_stats(ds, max_cases=zmax)
+        print(f"[z-score] mean={mean:.4f} std={std:.4f}")
 
     # ---------------- model ----------------
     model = InterpolationModel(
@@ -180,20 +189,38 @@ def main() -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=float(train_cfg.get("lr", 1e-3)))
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp) if use_amp else None
 
-    # ---------------- logging dirs: logs/{version}_{data_name}_fv{final_view} ----------------
-    run_dir = os.path.join(args.log_root, f"{args.version}_{data_name}_fv{num_inputs}")
-    os.makedirs(run_dir, exist_ok=True)
-    ckpt_dir = os.path.join(run_dir, "checkpoints")
-    os.makedirs(ckpt_dir, exist_ok=True)
+    if resume_ckpt is not None:
+        model.load_state_dict(resume_ckpt["model"])
+        if "optimizer" in resume_ckpt:
+            optimizer.load_state_dict(resume_ckpt["optimizer"])
+        if scaler is not None and resume_ckpt.get("scaler") is not None:
+            scaler.load_state_dict(resume_ckpt["scaler"])
+
+    # ---------------- loss -------------
+    val_range = float(loss_cfg.get("val_range", 255.0))
+    window_size = int(loss_cfg.get("ssim_window", 11))
+    alpha = args.alpha if args.alpha is not None else float(loss_cfg.get("alpha", 1e-2))
+    lambda_consistency = (args.lambda_consistency if args.lambda_consistency is not None
+                          else float(loss_cfg.get("lambda_consistency", 1.0)))
+    use_consistency = args.consistency
+
+    vgg = VGGPerceptualLoss(
+        feature_layers=int(loss_cfg.get("vgg_feature_layers", 9)),
+        input_range=val_range,
+        weights=loss_cfg.get("vgg_weights", "IMAGENET1K_V1"),
+    ).to(device)
+    criterion = InterpolationLoss(alpha=alpha, val_range=val_range,
+                                  window_size=window_size, vgg=vgg)
+
+    # ---------------- logging ----------------
     writer = SummaryWriter(run_dir) if SummaryWriter is not None else None
     print(f"[run] version={args.version} | data={data_name} | final_view={num_inputs} "
-          f"| amp={use_amp} | log_dir={run_dir}")
+          f"| amp={use_amp} | consistency={use_consistency} "
+          f"| resume={resume_ckpt is not None} | log_dir={run_dir}")
 
     log_every = int(log_cfg.get("log_every_steps", 50))
     epochs = args.epochs if args.epochs is not None else int(train_cfg.get("epochs", 300))
     rotors_per_case = int(train_cfg.get("rotors_per_case", 6))
-    val_range = float(loss_cfg.get("val_range", 255.0))
-    window_size = int(loss_cfg.get("ssim_window", 11))
 
     cases = ds.cases if args.max_cases is None else ds.cases[: args.max_cases]
 
@@ -204,15 +231,17 @@ def main() -> None:
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
 
-    global_step = 0
     stop = False
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         if stop:
             break
         model.train()
         order = rng.permutation(len(cases))
         epoch_loss = 0.0
         epoch_n = 0
+        sum_ssim = 0.0
+        sum_vgg = 0.0
+        sum_cons = 0.0
 
         for case_i in order:
             if stop:
@@ -245,12 +274,35 @@ def main() -> None:
                     target = torch.from_numpy(np.ascontiguousarray(projs[t])) \
                         .unsqueeze(0).unsqueeze(0).to(device)                 # (1, 1, H, W)
 
+                    # second (local) view set for the optional consistency term
+                    pred_b = None
+                    if use_consistency:
+                        src_b_idx = nearest_source_idx(angles, int(t), num_inputs)
+                        src_b = projs[src_b_idx]
+                        src_b_angles = angles[src_b_idx]
+                        src_b_list = [
+                            torch.from_numpy(np.ascontiguousarray(src_b[i]))
+                            .unsqueeze(0).unsqueeze(0).to(device)
+                            for i in range(len(src_b_idx))
+                        ]
+                        angular_b = _wrap_pi(target_angle - src_b_angles).astype(np.float32)
+                        if use_cos_sin:
+                            angular_b = np.concatenate([np.cos(angular_b) - 1.0, np.sin(angular_b)])
+                        ang_b = torch.from_numpy(angular_b).unsqueeze(0).to(device)
+
                     with torch.autocast(device_type="cuda", dtype=torch.float16,
                                         enabled=use_amp):
-                        pred = model(src_list, ang)                           # (1, 1, H, W)
+                        pred_a = model(src_list, ang)                        # (1, 1, H, W)
+                        if use_consistency:
+                            pred_b = model(src_b_list, ang_b)
 
-                    # SSIM in fp32: values are 0..255, their squares overflow fp16.
-                    loss = 1.0 - ssim(pred.float(), target.float(), window_size, val_range)
+                    # SSIM / VGG / consistency in fp32 (0..255 squares overflow fp16).
+                    l_ssim, l_vgg, sup_loss = criterion.compute(pred_a.float(), target.float())
+                    loss = sup_loss
+                    if use_consistency:
+                        l_cons = consistency_loss(pred_a.float(), pred_b.float(),
+                                                  val_range=val_range, window_size=window_size)
+                        loss = loss + lambda_consistency * l_cons
 
                     optimizer.zero_grad()
                     if scaler is not None:
@@ -264,15 +316,24 @@ def main() -> None:
                     global_step += 1
                     epoch_loss += loss.item()
                     epoch_n += 1
+                    sum_ssim += l_ssim.item()
+                    sum_vgg += l_vgg.item()
+                    if use_consistency:
+                        sum_cons += l_cons.item()
 
                     if global_step % log_every == 0 or global_step == 1:
                         alloc = _gib(torch.cuda.memory_allocated()) if device == "cuda" else 0.0
                         peak = _gib(torch.cuda.max_memory_allocated()) if device == "cuda" else 0.0
                         print(f"epoch {epoch}/{epochs} | step {global_step} | "
-                              f"loss {loss.item():.4f} | gpu {alloc:.2f}G (peak {peak:.2f}G) | "
+                              f"loss {loss.item():.4f} (ssim {l_ssim.item():.4f}, "
+                              f"vgg {l_vgg.item():.4f}) | gpu {alloc:.2f}G (peak {peak:.2f}G) | "
                               f"lr {optimizer.param_groups[0]['lr']:.2e}")
                         if writer is not None:
-                            writer.add_scalar("train/loss_step", loss.item(), global_step)
+                            writer.add_scalar("loss/total", loss.item(), global_step)
+                            writer.add_scalar("loss/ssim", l_ssim.item(), global_step)
+                            writer.add_scalar("loss/vgg", l_vgg.item(), global_step)
+                            if use_consistency:
+                                writer.add_scalar("loss/consistency", l_cons.item(), global_step)
                             if device == "cuda":
                                 writer.add_scalar("gpu/memory_allocated_GB", alloc, global_step)
                                 writer.add_scalar("gpu/max_memory_GB", peak, global_step)
@@ -284,13 +345,20 @@ def main() -> None:
         avg = epoch_loss / max(epoch_n, 1)
         print(f"== epoch {epoch}/{epochs} | avg loss {avg:.4f} ==")
         if writer is not None:
-            writer.add_scalar("train/loss_epoch", avg, epoch)
+            writer.add_scalar("loss/total_epoch", avg, epoch)
+            writer.add_scalar("loss/ssim_epoch", sum_ssim / max(epoch_n, 1), epoch)
+            writer.add_scalar("loss/vgg_epoch", sum_vgg / max(epoch_n, 1), epoch)
+            if use_consistency:
+                writer.add_scalar("loss/consistency_epoch", sum_cons / max(epoch_n, 1), epoch)
 
         if epoch % int(log_cfg.get("checkpoint_every_epochs", 10)) == 0 or stop:
             torch.save(
                 {
                     "epoch": epoch,
+                    "global_step": global_step,
                     "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scaler": scaler.state_dict() if scaler is not None else None,
                     "zscore_mean": mean,
                     "zscore_std": std,
                     "config": cfg,

@@ -87,6 +87,92 @@ def find_latest_checkpoint(ckpt_dir: str):
     return os.path.join(ckpt_dir, files[-1])
 
 
+def run_eval(model, ds_eval, criterion, device, use_amp, use_cos_sin,
+             num_inputs, rotors_per_case, use_consistency, val_range,
+             window_size, lambda_consistency, rng) -> dict:
+    """Evaluate the model on the eval set and return per-epoch average losses.
+
+    Uses the same 6x6-style rotor sampling as training (deterministic via the
+    caller-supplied ``rng``), runs under ``torch.no_grad()`` and averages all
+    loss components over the whole eval epoch.  Returns a dict with ``total``,
+    ``ssim``, ``vgg``, (``consistency`` if enabled) and ``n`` (samples seen).
+    """
+    model.eval()
+    total_acc = ssim_acc = vgg_acc = cons_acc = 0.0
+    n = 0
+    for case in ds_eval.cases:
+        data = ds_eval.load_case(case)
+        projs = data["projs"]                      # (K, H, W) float32, raw
+        angles = data["angles"]                    # (K,)
+        k = int(projs.shape[0])
+        for _ in range(rotors_per_case):
+            src_idx, tgt_idx = sample_rotor_targets(k, num_inputs, rng)
+            src = projs[src_idx]
+            src_angles = angles[src_idx]
+            src_list = [
+                torch.from_numpy(np.ascontiguousarray(src[i]))
+                .unsqueeze(0).unsqueeze(0).to(device)
+                for i in range(len(src_idx))
+            ]
+            for t in tgt_idx:
+                with torch.no_grad():
+                    target_angle = float(angles[t])
+                    angular = _wrap_pi(target_angle - src_angles).astype(np.float32)
+                    if use_cos_sin:
+                        angular = np.concatenate([np.cos(angular) - 1.0, np.sin(angular)])
+                    ang = torch.from_numpy(angular).unsqueeze(0).to(device)
+
+                    target = torch.from_numpy(np.ascontiguousarray(projs[t])) \
+                        .unsqueeze(0).unsqueeze(0).to(device)
+
+                    pred_b = None
+                    if use_consistency:
+                        src_b_idx = nearest_source_idx(angles, int(t), num_inputs)
+                        src_b = projs[src_b_idx]
+                        src_b_angles = angles[src_b_idx]
+                        src_b_list = [
+                            torch.from_numpy(np.ascontiguousarray(src_b[i]))
+                            .unsqueeze(0).unsqueeze(0).to(device)
+                            for i in range(len(src_b_idx))
+                        ]
+                        angular_b = _wrap_pi(target_angle - src_b_angles).astype(np.float32)
+                        if use_cos_sin:
+                            angular_b = np.concatenate(
+                                [np.cos(angular_b) - 1.0, np.sin(angular_b)])
+                        ang_b = torch.from_numpy(angular_b).unsqueeze(0).to(device)
+
+                    with torch.autocast(device_type="cuda", dtype=torch.float16,
+                                        enabled=use_amp):
+                        pred_a = model(src_list, ang)
+                        if use_consistency:
+                            pred_b = model(src_b_list, ang_b)
+
+                    l_ssim, l_vgg, sup_loss = criterion.compute(
+                        pred_a.float(), target.float())
+                    loss = sup_loss
+                    if use_consistency:
+                        l_cons = consistency_loss(pred_a.float(), pred_b.float(),
+                                                  val_range=val_range,
+                                                  window_size=window_size)
+                        loss = loss + lambda_consistency * l_cons
+
+                total_acc += float(loss.item())
+                ssim_acc += float(l_ssim.item())
+                vgg_acc += float(l_vgg.item())
+                if use_consistency:
+                    cons_acc += float(l_cons.item())
+                n += 1
+
+    model.train()
+    res = {"total": total_acc / max(n, 1),
+           "ssim": ssim_acc / max(n, 1),
+           "vgg": vgg_acc / max(n, 1),
+           "n": n}
+    if use_consistency:
+        res["consistency"] = cons_acc / max(n, 1)
+    return res
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train the projection interpolation model (Fig. 3).")
     parser.add_argument("--config",
@@ -119,6 +205,15 @@ def main() -> None:
     parser.add_argument("--min_views", type=int, default=450,
                         help="drop cases with fewer than N projections "
                              "(skips missing/sparse-view cases; default from config training.min_views)")
+    parser.add_argument("--eval_split", default=None,
+                        help="split to evaluate on each epoch (default config eval_split / 'eval'; "
+                             "use empty string to disable eval)")
+    parser.add_argument("--eval_every", type=int, default=None,
+                        help="run eval every N epochs (default config logging.eval_every_epochs / 1)")
+    parser.add_argument("--eval_rotors", type=int, default=None,
+                        help="rotors per case during eval (default = rotors_per_case)")
+    parser.add_argument("--eval_max_cases", type=int, default=None,
+                        help="limit eval cases (smoke test)")
     parser.add_argument("--zscore_max_cases", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--log_root", default=os.path.join(PROJECT_ROOT, "logs"))
@@ -161,6 +256,22 @@ def main() -> None:
                  else train_cfg.get("min_views"))
     ds = ProjectionInterpolationDataset(root, split=cfg.get("split", "train"),
                                         num_inputs=num_inputs, min_views=min_views)
+
+    # ---------------- eval dataset (optional, same min_views filter) ------
+    eval_split = args.eval_split if args.eval_split is not None \
+        else cfg.get("eval_split", "eval")
+    ds_eval = None
+    if eval_split:
+        ds_eval = ProjectionInterpolationDataset(
+            root, split=eval_split, num_inputs=num_inputs, min_views=min_views)
+
+    eval_every = (args.eval_every if args.eval_every is not None
+                  else int(log_cfg.get("eval_every_epochs", 1)))
+    eval_rotors = (args.eval_rotors if args.eval_rotors is not None
+                   else int(train_cfg.get("rotors_per_case", 6)))
+    if args.eval_max_cases is not None:
+        ds_eval.cases = ds_eval.cases[: args.eval_max_cases]
+    eval_rng = np.random.default_rng(seed + 1000)   # deterministic eval sampling
 
     # ---------------- resume or fresh z-score stats ----------------
     start_epoch = 1
@@ -237,6 +348,10 @@ def main() -> None:
     print(f"data_root={root}")
     print(f"cases={len(cases)} views/case={ds.views_per_case} "
           f"steps/case={rotors_per_case * num_inputs} device={device}")
+    if ds_eval is not None:
+        print(f"[eval] split={eval_split} cases={len(ds_eval.cases)} "
+              f"every={eval_every} epoch(s) rotors/case={eval_rotors} "
+              f"steps/eval_epoch={eval_rotors * num_inputs * len(ds_eval.cases)}")
 
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
@@ -369,6 +484,25 @@ def main() -> None:
             writer.add_scalar("loss/vgg_epoch", sum_vgg / max(epoch_n, 1), epoch)
             if use_consistency:
                 writer.add_scalar("loss/consistency_epoch", sum_cons / max(epoch_n, 1), epoch)
+
+        # ---------------- validation (per-epoch average) ----------------
+        if ds_eval is not None and (epoch % eval_every == 0 or stop):
+            er = run_eval(
+                model, ds_eval, criterion, device, use_amp, use_cos_sin,
+                num_inputs, eval_rotors, use_consistency, val_range,
+                window_size, lambda_consistency, eval_rng)
+            cons_str = f", consistency {er.get('consistency', float('nan')):.4f}" \
+                if use_consistency else ""
+            print(f"== [eval] epoch {epoch}/{epochs} | avg loss {er['total']:.4f} "
+                  f"(ssim {er['ssim']:.4f}, vgg {er['vgg']:.4f})"
+                  f"{cons_str} | n={er['n']} ==")
+            if writer is not None:
+                writer.add_scalar("eval/total_epoch", er["total"], epoch)
+                writer.add_scalar("eval/ssim_epoch", er["ssim"], epoch)
+                writer.add_scalar("eval/vgg_epoch", er["vgg"], epoch)
+                if use_consistency:
+                    writer.add_scalar("eval/consistency_epoch",
+                                      er["consistency"], epoch)
 
         if epoch % int(log_cfg.get("checkpoint_every_epochs", 10)) == 0 or stop:
             torch.save(

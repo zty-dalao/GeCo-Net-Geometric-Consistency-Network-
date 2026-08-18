@@ -39,6 +39,7 @@
   },
   "logging": {
     "log_every_steps": 50,
-    "checkpoint_every_epochs": 10
+    "checkpoint_every_epochs": 10,
+    "eval_every_epochs": 1
   }
 }

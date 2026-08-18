@@ -197,6 +197,9 @@ tensorboard --logdir logs
 | `--max_steps` | 只跑 N 步（冒烟测试） |
 | `--max_cases` | 每 epoch 限制病例数（冒烟测试） |
 | `--min_views` | 丢弃视角数少于 N 的病例（自动跳过缺失 pickle / 视角过少的样本） |
+| `--eval_split` | 每个 epoch 验证用的 split（默认 `eval`；传空串关闭验证） |
+| `--eval_every` | 每 N 个 epoch 验证一次（默认读 config 的 `logging.eval_every_epochs`） |
+| `--eval_rotors` | 验证时每个病例的转子数（默认 = `rotors_per_case`） |
 | `--zscore_max_cases` | z-score 统计量扫描的病例数 |
 | `--device` | `cuda` / `cpu` |
 
@@ -209,7 +212,7 @@ tensorboard --logdir logs
 | `model` | `in_channels`（源投影数）、`base_channels`、`num_down`、`num_regions` |
 | `training` | `epochs`、`lr`、`rotors_per_case`、`use_cos_sin`、`amp`、`seed`、`zscore_max_cases`、`min_views`、`clip_grad_norm` |
 | `loss` | `ssim_window`、`val_range`（=255）、`alpha`、`lambda_consistency`、`vgg_feature_layers`、`vgg_weights` |
-| `logging` | `log_every_steps`、`checkpoint_every_epochs` |
+| `logging` | `log_every_steps`、`checkpoint_every_epochs`、`eval_every_epochs` |
 
 > 训练与推理统一从 `config/config.json` 读取 `data_name` / `data_roots` 等配置。
 

@@ -77,6 +77,18 @@ def nearest_source_idx(angles: np.ndarray, target_idx: int, num_inputs: int) -> 
     return np.argsort(d)[:num_inputs]
 
 
+def rotate_view_indices(src_idx, num_views: int, delta: float) -> np.ndarray:
+    """Rotate a set of (rotor) view indices by ``delta`` views, mod ``num_views``.
+
+    Used for the rotation-consistency branch: the SAME equidistant 360-deg
+    rotor is rotated by a small angular offset ``delta`` so that both branches
+    keep the identical geometric structure (``num_inputs`` views spanning
+    360 deg) but with a different phase, while predicting the same target
+    angle.  Returns the rotated indices sorted (ascending).
+    """
+    return sorted({int(v) % num_views for v in (np.asarray(src_idx, dtype=np.int64) + delta)})
+
+
 def find_latest_checkpoint(ckpt_dir: str):
     """Return the path of the newest ``interpolation_epoch*.pt`` in ``ckpt_dir``."""
     files = [f for f in os.listdir(ckpt_dir)
@@ -127,7 +139,15 @@ def run_eval(model, ds_eval, criterion, device, use_amp, use_cos_sin,
 
                     pred_b = None
                     if use_consistency:
-                        src_b_idx = nearest_source_idx(angles, int(t), num_inputs)
+                        # rotation consistency: same rotor, small phase offset;
+                        # re-sample delta until branch B excludes the target.
+                        delta = rng.uniform(1.0, max(k / (2.0 * num_inputs), 2.0))
+                        src_b_idx = rotate_view_indices(src_idx, k, delta)
+                        attempt = 0
+                        while int(t) in src_b_idx and attempt < 20:
+                            delta = rng.uniform(1.0, max(k / (2.0 * num_inputs), 2.0))
+                            src_b_idx = rotate_view_indices(src_idx, k, delta)
+                            attempt += 1
                         src_b = projs[src_b_idx]
                         src_b_angles = angles[src_b_idx]
                         src_b_list = [
@@ -415,10 +435,21 @@ def main() -> None:
                     target = torch.from_numpy(np.ascontiguousarray(projs[t])) \
                         .unsqueeze(0).unsqueeze(0).to(device)                 # (1, 1, H, W)
 
-                    # second (local) view set for the optional consistency term
+                    # second branch (rotation consistency): the SAME rotor
+                    # (num_inputs equidistant views over 360 deg) rotated by a
+                    # small angular offset, predicting the SAME target angle.
                     pred_b = None
                     if use_consistency:
-                        src_b_idx = nearest_source_idx(angles, int(t), num_inputs)
+                        # re-sample delta until branch B does NOT contain the
+                        # target view itself (avoids trivial consistency where
+                        # branch B directly "sees" the answer).
+                        delta = rng.uniform(1.0, max(k / (2.0 * num_inputs), 2.0))
+                        src_b_idx = rotate_view_indices(src_idx, k, delta)
+                        attempt = 0
+                        while int(t) in src_b_idx and attempt < 20:
+                            delta = rng.uniform(1.0, max(k / (2.0 * num_inputs), 2.0))
+                            src_b_idx = rotate_view_indices(src_idx, k, delta)
+                            attempt += 1
                         src_b = projs[src_b_idx]
                         src_b_angles = angles[src_b_idx]
                         src_b_list = [

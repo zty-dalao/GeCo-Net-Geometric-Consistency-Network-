@@ -69,6 +69,30 @@ def _transposed_output_size(
     return h_out, w_out
 
 
+def _safe_softmax(x: torch.Tensor, dim: int, eps: float = 1e-6) -> torch.Tensor:
+    """Numerically-safe softmax for the region guided mask (fp16 guard).
+
+    Under fp16 autocast the ``guide_mask`` logits can overflow to ``inf``
+    (or a NaN can be injected from an earlier layer), which makes ``softmax``
+    return ``NaN`` for the whole spatial plane and immediately poisons every
+    downstream loss.  This helper:
+
+        * strips ``nan`` / ``inf`` from the logits,
+        * runs the stable softmax (max-subtracted),
+        * zeroes any residual ``nan`` in the output,
+        * re-normalizes with an ``eps``-guarded denominator so the region
+          weights still sum to ~1 after a NaN was zeroed.
+
+    For well-behaved inputs (softmax output already sums to 1) the final
+    division is an identity and does not alter gradients.
+    """
+    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    out = F.softmax(x, dim=dim)
+    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+    denom = out.sum(dim=dim, keepdim=True).clamp_min(eps)
+    return out / denom
+
+
 class Conv(nn.Module):
     """Plain 2-D convolution - the ``Conv`` blue square of the DRRConv branch.
 
@@ -261,7 +285,7 @@ class DRRConv(nn.Module):
         mask = F.interpolate(
             self.guide_mask, size=(h, w), mode="bilinear", align_corners=False
         )
-        return F.softmax(mask, dim=1)
+        return _safe_softmax(mask, dim=1)
 
     def forward(self, x: torch.Tensor, angular: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Forward pass.
@@ -290,6 +314,9 @@ class DRRConv(nn.Module):
         )
         for r, conv in enumerate(self.regions):
             conv_r = conv(x)
+            # fp16 guard: a NaN/Inf in one region's conv output must not
+            # poison the whole weighted sum (identity for finite values).
+            conv_r = torch.nan_to_num(conv_r, nan=0.0, posinf=0.0, neginf=0.0)
             # Scaling the mask by the regulator is equivalent to scaling the
             # region filter by the regulator (convolution is linear in weights),
             # and it keeps the batch dimension intact.
@@ -383,7 +410,7 @@ class DRRTransConv(nn.Module):
         mask = F.interpolate(
             self.guide_mask, size=(h, w), mode="bilinear", align_corners=False
         )
-        return F.softmax(mask, dim=1)
+        return _safe_softmax(mask, dim=1)
 
     def _output_size(self, x: torch.Tensor) -> Tuple[int, int]:
         return _transposed_output_size(
@@ -412,6 +439,9 @@ class DRRTransConv(nn.Module):
         )
         for r, conv in enumerate(self.regions):
             conv_r = conv(x)
+            # fp16 guard: a NaN/Inf in one region's conv output must not
+            # poison the whole weighted sum (identity for finite values).
+            conv_r = torch.nan_to_num(conv_r, nan=0.0, posinf=0.0, neginf=0.0)
             region_mask = mask[:, r : r + 1] * regulators[:, r].view(b, 1, 1, 1)
             out = out + conv_r * region_mask
 

@@ -25,7 +25,9 @@
     "use_cos_sin": true,
     "amp": true,
     "seed": 0,
-    "zscore_max_cases": 16
+    "zscore_max_cases": 16,
+    "min_views": null,
+    "clip_grad_norm": 1.0
   },
   "loss": {
     "ssim_window": 11,

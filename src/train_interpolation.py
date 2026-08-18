@@ -107,12 +107,18 @@ def main() -> None:
     parser.add_argument("--lambda_consistency", type=float, default=None,
                         help="consistency loss weight (default from config loss.lambda_consistency)")
     parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--clip_grad", type=float, default=None,
+                        help="gradient norm clipping threshold (0 disables; "
+                             "default from config training.clip_grad_norm)")
     parser.add_argument("--resume", action="store_true",
                         help="resume from the latest checkpoint in the run's checkpoints dir")
     parser.add_argument("--max_steps", type=int, default=None,
                         help="stop after N optimizer steps (smoke test)")
     parser.add_argument("--max_cases", type=int, default=None,
                         help="limit cases per epoch (smoke test)")
+    parser.add_argument("--min_views", type=int, default=450,
+                        help="drop cases with fewer than N projections "
+                             "(skips missing/sparse-view cases; default from config training.min_views)")
     parser.add_argument("--zscore_max_cases", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--log_root", default=os.path.join(PROJECT_ROOT, "logs"))
@@ -151,8 +157,10 @@ def main() -> None:
     ckpt_dir = os.path.join(run_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
+    min_views = (args.min_views if args.min_views is not None
+                 else train_cfg.get("min_views"))
     ds = ProjectionInterpolationDataset(root, split=cfg.get("split", "train"),
-                                        num_inputs=num_inputs)
+                                        num_inputs=num_inputs, min_views=min_views)
 
     # ---------------- resume or fresh z-score stats ----------------
     start_epoch = 1
@@ -203,6 +211,8 @@ def main() -> None:
     lambda_consistency = (args.lambda_consistency if args.lambda_consistency is not None
                           else float(loss_cfg.get("lambda_consistency", 1.0)))
     use_consistency = args.consistency
+    clip_grad = (args.clip_grad if args.clip_grad is not None
+                 else float(train_cfg.get("clip_grad_norm", 0.0)))
 
     vgg = VGGPerceptualLoss(
         feature_layers=int(loss_cfg.get("vgg_feature_layers", 9)),
@@ -216,7 +226,7 @@ def main() -> None:
     writer = SummaryWriter(run_dir) if SummaryWriter is not None else None
     print(f"[run] version={args.version} | data={data_name} | final_view={num_inputs} "
           f"| amp={use_amp} | consistency={use_consistency} "
-          f"| resume={resume_ckpt is not None} | log_dir={run_dir}")
+          f"| clip_grad={clip_grad} | resume={resume_ckpt is not None} | log_dir={run_dir}")
 
     log_every = int(log_cfg.get("log_every_steps", 50))
     epochs = args.epochs if args.epochs is not None else int(train_cfg.get("epochs", 300))
@@ -307,10 +317,19 @@ def main() -> None:
                     optimizer.zero_grad()
                     if scaler is not None:
                         scaler.scale(loss).backward()
+                        if clip_grad > 0.0:
+                            # Unscale before clipping so the norm threshold
+                            # applies to the true (unscaled) gradients.
+                            scaler.unscale_(optimizer)
+                            torch.nn.utils.clip_grad_norm_(
+                                model.parameters(), clip_grad)
                         scaler.step(optimizer)
                         scaler.update()
                     else:
                         loss.backward()
+                        if clip_grad > 0.0:
+                            torch.nn.utils.clip_grad_norm_(
+                                model.parameters(), clip_grad)
                         optimizer.step()
 
                     global_step += 1

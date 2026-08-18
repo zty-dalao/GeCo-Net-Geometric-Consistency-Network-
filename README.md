@@ -192,9 +192,11 @@ tensorboard --logdir logs
 | `--consistency` | 开启可选的一致性损失 |
 | `--lambda_consistency` | 一致性损失权重（默认读 config 的 `loss.lambda_consistency`） |
 | `--epochs` | 覆盖训练轮数 |
+| `--clip_grad` | 梯度范数裁剪阈值（0 关闭；默认读 config 的 `training.clip_grad_norm`） |
 | `--resume` | 从 run 的 checkpoints 目录里加载最新断点继续训练 |
 | `--max_steps` | 只跑 N 步（冒烟测试） |
 | `--max_cases` | 每 epoch 限制病例数（冒烟测试） |
+| `--min_views` | 丢弃视角数少于 N 的病例（自动跳过缺失 pickle / 视角过少的样本） |
 | `--zscore_max_cases` | z-score 统计量扫描的病例数 |
 | `--device` | `cuda` / `cpu` |
 
@@ -205,7 +207,7 @@ tensorboard --logdir logs
 | `data_name` | 默认数据名（如 `thorax`） |
 | `data_roots` | 各数据名对应的**候选路径列表**（自动取第一个存在的，支持 `~` 展开） |
 | `model` | `in_channels`（源投影数）、`base_channels`、`num_down`、`num_regions` |
-| `training` | `epochs`、`lr`、`rotors_per_case`、`use_cos_sin`、`amp`、`seed`、`zscore_max_cases` |
+| `training` | `epochs`、`lr`、`rotors_per_case`、`use_cos_sin`、`amp`、`seed`、`zscore_max_cases`、`min_views`、`clip_grad_norm` |
 | `loss` | `ssim_window`、`val_range`（=255）、`alpha`、`lambda_consistency`、`vgg_feature_layers`、`vgg_weights` |
 | `logging` | `log_every_steps`、`checkpoint_every_epochs` |
 

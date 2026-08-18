@@ -66,6 +66,11 @@ class ProjectionInterpolationDataset(Dataset):
         Number of cases kept in memory (each ~200 MB at full resolution).
     resize:
         Optional ``(H, W)`` to resize each projection to (bilinear).
+    min_views:
+        Optional minimum number of projections per case.  Cases whose pickle
+        is missing or whose file size is below ``min_views * 320 * 1280``
+        bytes (uint8 projections) are silently dropped.  ``None`` keeps every
+        case that has a pickle.
     """
 
     def __init__(
@@ -76,6 +81,7 @@ class ProjectionInterpolationDataset(Dataset):
         source_mode: str = "symmetric",
         cache_cases: int = 4,
         resize: Optional[Tuple[int, int]] = None,
+        min_views: Optional[int] = None,
     ) -> None:
         self.root_dir = root_dir
         self.proj_dir = os.path.join(root_dir, "processed", "projections")
@@ -83,6 +89,7 @@ class ProjectionInterpolationDataset(Dataset):
         self.source_mode = source_mode
         self.cache_cases = cache_cases
         self.resize = resize
+        self.min_views = min_views
 
         if not os.path.isdir(self.proj_dir):
             raise FileNotFoundError(f"projections dir not found: {self.proj_dir}")
@@ -101,7 +108,27 @@ class ProjectionInterpolationDataset(Dataset):
                 for name in os.listdir(self.proj_dir)
                 if name.endswith(".pickle")
             )
-        self.cases = list(cases)
+
+        # --- drop missing / too-sparse cases ------------------------------
+        # A full 491-view uint8 (320,1280) pickle is ~201.5 MB; per-view bytes
+        # are 320*1280.  File-size prefilter avoids loading every pickle here.
+        kept: list = []
+        for c in cases:
+            p = os.path.join(self.proj_dir, f"{c}.pickle")
+            if not os.path.isfile(p):
+                continue  # no projection data at all -> skip
+            if min_views is not None and os.path.getsize(p) < min_views * 320 * 1280:
+                continue  # too few projections -> skip
+            kept.append(c)
+        dropped = len(cases) - len(kept)
+        if dropped:
+            print(f"[dataset] dropped {dropped}/{len(cases)} cases "
+                  f"(missing pickle or < min_views={min_views})")
+        self.cases = kept
+        if not self.cases:
+            raise FileNotFoundError(
+                f"no valid projection pickles in {self.proj_dir} "
+                f"(split={split}, min_views={min_views})")
 
         # --- lazy case cache ----------------------------------------------
         self._cache: "OrderedDict[str, dict]" = OrderedDict()

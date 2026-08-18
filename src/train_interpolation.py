@@ -208,6 +208,9 @@ def main() -> None:
     parser.add_argument("--eval_split", default=None,
                         help="split to evaluate on each epoch (default config eval_split / 'eval'; "
                              "use empty string to disable eval)")
+    parser.add_argument("--test_split", default=None,
+                        help="split to evaluate on each epoch as test (default config test_split / 'test'; "
+                             "use empty string to disable test)")
     parser.add_argument("--eval_every", type=int, default=None,
                         help="run eval every N epochs (default config logging.eval_every_epochs / 1)")
     parser.add_argument("--eval_rotors", type=int, default=None,
@@ -257,21 +260,30 @@ def main() -> None:
     ds = ProjectionInterpolationDataset(root, split=cfg.get("split", "train"),
                                         num_inputs=num_inputs, min_views=min_views)
 
-    # ---------------- eval dataset (optional, same min_views filter) ------
+    # ---------------- val / test datasets (optional, same min_views) ------
     eval_split = args.eval_split if args.eval_split is not None \
         else cfg.get("eval_split", "eval")
+    test_split = args.test_split if args.test_split is not None \
+        else cfg.get("test_split", "test")
     ds_eval = None
     if eval_split:
         ds_eval = ProjectionInterpolationDataset(
             root, split=eval_split, num_inputs=num_inputs, min_views=min_views)
+        if args.eval_max_cases is not None:
+            ds_eval.cases = ds_eval.cases[: args.eval_max_cases]
+    ds_test = None
+    if test_split:
+        ds_test = ProjectionInterpolationDataset(
+            root, split=test_split, num_inputs=num_inputs, min_views=min_views)
+        if args.eval_max_cases is not None:
+            ds_test.cases = ds_test.cases[: args.eval_max_cases]
 
     eval_every = (args.eval_every if args.eval_every is not None
                   else int(log_cfg.get("eval_every_epochs", 1)))
     eval_rotors = (args.eval_rotors if args.eval_rotors is not None
                    else int(train_cfg.get("rotors_per_case", 6)))
-    if args.eval_max_cases is not None:
-        ds_eval.cases = ds_eval.cases[: args.eval_max_cases]
-    eval_rng = np.random.default_rng(seed + 1000)   # deterministic eval sampling
+    eval_rng = np.random.default_rng(seed + 1000)   # deterministic val sampling
+    test_rng = np.random.default_rng(seed + 2000)   # deterministic test sampling
 
     # ---------------- resume or fresh z-score stats ----------------
     start_epoch = 1
@@ -349,9 +361,13 @@ def main() -> None:
     print(f"cases={len(cases)} views/case={ds.views_per_case} "
           f"steps/case={rotors_per_case * num_inputs} device={device}")
     if ds_eval is not None:
-        print(f"[eval] split={eval_split} cases={len(ds_eval.cases)} "
+        print(f"[val] split={eval_split} cases={len(ds_eval.cases)} "
               f"every={eval_every} epoch(s) rotors/case={eval_rotors} "
-              f"steps/eval_epoch={eval_rotors * num_inputs * len(ds_eval.cases)}")
+              f"steps/val_epoch={eval_rotors * num_inputs * len(ds_eval.cases)}")
+    if ds_test is not None:
+        print(f"[test] split={test_split} cases={len(ds_test.cases)} "
+              f"every={eval_every} epoch(s) rotors/case={eval_rotors} "
+              f"steps/test_epoch={eval_rotors * num_inputs * len(ds_test.cases)}")
 
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
@@ -463,11 +479,11 @@ def main() -> None:
                               f"vgg {l_vgg.item():.4f}) | gpu {alloc:.2f}G (peak {peak:.2f}G) | "
                               f"lr {optimizer.param_groups[0]['lr']:.2e}")
                         if writer is not None:
-                            writer.add_scalar("loss/total", loss.item(), global_step)
-                            writer.add_scalar("loss/ssim", l_ssim.item(), global_step)
-                            writer.add_scalar("loss/vgg", l_vgg.item(), global_step)
+                            writer.add_scalar("train/total", loss.item(), global_step)
+                            writer.add_scalar("train/ssim", l_ssim.item(), global_step)
+                            writer.add_scalar("train/vgg", l_vgg.item(), global_step)
                             if use_consistency:
-                                writer.add_scalar("loss/consistency", l_cons.item(), global_step)
+                                writer.add_scalar("train/consistency", l_cons.item(), global_step)
                             if device == "cuda":
                                 writer.add_scalar("gpu/memory_allocated_GB", alloc, global_step)
                                 writer.add_scalar("gpu/max_memory_GB", peak, global_step)
@@ -479,11 +495,11 @@ def main() -> None:
         avg = epoch_loss / max(epoch_n, 1)
         print(f"== epoch {epoch}/{epochs} | avg loss {avg:.4f} ==")
         if writer is not None:
-            writer.add_scalar("loss/total_epoch", avg, epoch)
-            writer.add_scalar("loss/ssim_epoch", sum_ssim / max(epoch_n, 1), epoch)
-            writer.add_scalar("loss/vgg_epoch", sum_vgg / max(epoch_n, 1), epoch)
+            writer.add_scalar("train/total_epoch", avg, epoch)
+            writer.add_scalar("train/ssim_epoch", sum_ssim / max(epoch_n, 1), epoch)
+            writer.add_scalar("train/vgg_epoch", sum_vgg / max(epoch_n, 1), epoch)
             if use_consistency:
-                writer.add_scalar("loss/consistency_epoch", sum_cons / max(epoch_n, 1), epoch)
+                writer.add_scalar("train/consistency_epoch", sum_cons / max(epoch_n, 1), epoch)
 
         # ---------------- validation (per-epoch average) ----------------
         if ds_eval is not None and (epoch % eval_every == 0 or stop):
@@ -493,16 +509,35 @@ def main() -> None:
                 window_size, lambda_consistency, eval_rng)
             cons_str = f", consistency {er.get('consistency', float('nan')):.4f}" \
                 if use_consistency else ""
-            print(f"== [eval] epoch {epoch}/{epochs} | avg loss {er['total']:.4f} "
+            print(f"== [val] epoch {epoch}/{epochs} | avg loss {er['total']:.4f} "
                   f"(ssim {er['ssim']:.4f}, vgg {er['vgg']:.4f})"
                   f"{cons_str} | n={er['n']} ==")
             if writer is not None:
-                writer.add_scalar("eval/total_epoch", er["total"], epoch)
-                writer.add_scalar("eval/ssim_epoch", er["ssim"], epoch)
-                writer.add_scalar("eval/vgg_epoch", er["vgg"], epoch)
+                writer.add_scalar("val/total_epoch", er["total"], epoch)
+                writer.add_scalar("val/ssim_epoch", er["ssim"], epoch)
+                writer.add_scalar("val/vgg_epoch", er["vgg"], epoch)
                 if use_consistency:
-                    writer.add_scalar("eval/consistency_epoch",
+                    writer.add_scalar("val/consistency_epoch",
                                       er["consistency"], epoch)
+
+        # ---------------- test (per-epoch average) -----------------------
+        if ds_test is not None and (epoch % eval_every == 0 or stop):
+            tr = run_eval(
+                model, ds_test, criterion, device, use_amp, use_cos_sin,
+                num_inputs, eval_rotors, use_consistency, val_range,
+                window_size, lambda_consistency, test_rng)
+            cons_str = f", consistency {tr.get('consistency', float('nan')):.4f}" \
+                if use_consistency else ""
+            print(f"== [test] epoch {epoch}/{epochs} | avg loss {tr['total']:.4f} "
+                  f"(ssim {tr['ssim']:.4f}, vgg {tr['vgg']:.4f})"
+                  f"{cons_str} | n={tr['n']} ==")
+            if writer is not None:
+                writer.add_scalar("test/total_epoch", tr["total"], epoch)
+                writer.add_scalar("test/ssim_epoch", tr["ssim"], epoch)
+                writer.add_scalar("test/vgg_epoch", tr["vgg"], epoch)
+                if use_consistency:
+                    writer.add_scalar("test/consistency_epoch",
+                                      tr["consistency"], epoch)
 
         if epoch % int(log_cfg.get("checkpoint_every_epochs", 10)) == 0 or stop:
             torch.save(

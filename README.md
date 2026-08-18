@@ -180,6 +180,18 @@ python src/inference.py --checkpoint logs/v1_thorax_fv6/checkpoints/interpolatio
 tensorboard --logdir logs
 ```
 
+TensorBoard 按 **card（命名空间）** 分组记录损失：
+
+| card | tag | 粒度 | 说明 |
+|------|-----|------|------|
+| `train` | `train/total` `train/ssim` `train/vgg` `train/consistency` | step | 每 `log_every` 步 |
+| `train` | `train/total_epoch` `train/ssim_epoch` `train/vgg_epoch` `train/consistency_epoch` | epoch | 每 epoch 平均 |
+| `val` | `val/total_epoch` `val/ssim_epoch` `val/vgg_epoch` `val/consistency_epoch` | epoch | 每 epoch 在 `eval` split 上平均 |
+| `test` | `test/total_epoch` `test/ssim_epoch` `test/vgg_epoch` `test/consistency_epoch` | epoch | 每 epoch 在 `test` split 上平均 |
+| `gpu` | `gpu/memory_allocated_GB` `gpu/max_memory_GB` | step | 显存占用 |
+
+> `consistency` 系列仅在使用 `--consistency` 时记录；`val`/`test` 仅在该 split 存在且启用时记录。
+
 常用命令行参数：
 
 | 参数 | 说明 |
@@ -198,8 +210,10 @@ tensorboard --logdir logs
 | `--max_cases` | 每 epoch 限制病例数（冒烟测试） |
 | `--min_views` | 丢弃视角数少于 N 的病例（自动跳过缺失 pickle / 视角过少的样本） |
 | `--eval_split` | 每个 epoch 验证用的 split（默认 `eval`；传空串关闭验证） |
-| `--eval_every` | 每 N 个 epoch 验证一次（默认读 config 的 `logging.eval_every_epochs`） |
-| `--eval_rotors` | 验证时每个病例的转子数（默认 = `rotors_per_case`） |
+| `--test_split` | 每个 epoch 测试用的 split（默认 `test`；传空串关闭测试） |
+| `--eval_every` | 每 N 个 epoch 验证/测试一次（默认读 config 的 `logging.eval_every_epochs`） |
+| `--eval_rotors` | 验证/测试时每个病例的转子数（默认 = `rotors_per_case`） |
+| `--eval_max_cases` | 限制验证/测试病例数（冒烟测试） |
 | `--zscore_max_cases` | z-score 统计量扫描的病例数 |
 | `--device` | `cuda` / `cpu` |
 

@@ -1,0 +1,15 @@
+# 忽略整个 dataset 数据文件夹（体积大，不入库）
+/dataset/
+
+# 训练/评估产生的日志、checkpoint、可视化结果
+train/
+evaluate/
+submodel/decoder/checkpoints/
+submodel/decoder/logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/

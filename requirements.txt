@@ -5,3 +5,4 @@ skimage==0.0
 torch==2.1.2+cu118
 torchvision==0.16.2+cu118
 tqdm==4.66.5
+tensorboard==2.20.0

@@ -6,10 +6,12 @@ import time
 from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import torch
 from pyhocon import ConfigFactory
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -44,7 +46,16 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Stop after this many training seconds; 0 disables the limit.",
     )
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="Use at most this many training subjects; intended for smoke tests.",
+    )
+    parser.add_argument(
+        "--eval-limit", type=int, default=None,
+        help="Use at most this many subjects from each validation/test split.",
+    )
+    parser.add_argument("--val-every", type=int, default=1)
+    parser.add_argument("--test-every", type=int, default=10)
     parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--no-amp", action="store_true")
     return parser.parse_args()
@@ -74,6 +85,7 @@ def save_checkpoint(
     epoch: int,
     step: int,
     elapsed_seconds: float,
+    best_val_loss: float,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -81,8 +93,9 @@ def save_checkpoint(
             "epoch": epoch,
             "step": step,
             "elapsed_seconds": elapsed_seconds,
+            "best_val_loss": best_val_loss,
             "model": model.state_dict(),
-            # This key can be loaded directly into models.model.decoder.
+            # This key loads directly into models.model.decoder.
             "decoder": model.decoder.state_dict(),
             "feature_stem": model.feature_stem.state_dict(),
             "optimizer": optimizer.state_dict(),
@@ -92,10 +105,108 @@ def save_checkpoint(
     )
 
 
+def append_jsonl(path: Path, metrics: dict[str, object]) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(metrics, ensure_ascii=False) + os.linesep)
+
+
+def make_loader(
+    data_root: Path,
+    split_file: Path,
+    split: str,
+    clamp_min: float,
+    clamp_max: float,
+    limit: int | None,
+    batch_size: int,
+    num_workers: int,
+    pin_memory: bool,
+) -> DataLoader:
+    dataset = DentalVolumeDataset(
+        data_root=str(data_root),
+        split_file=str(split_file),
+        split=split,
+        clamp_min=clamp_min,
+        clamp_max=clamp_max,
+        limit=limit,
+    )
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=split == "train",
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+
+
+def calculate_losses(
+    model: DecoderPretrainer,
+    volume: torch.Tensor,
+    l1_loss: torch.nn.Module,
+    mse_lambda_3d: float,
+    gd1_lambda: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    prediction, low_resolution, latent = model(volume)
+    loss_3d = l1_loss(prediction, volume) * mse_lambda_3d
+    loss_gd1 = gradient1_loss_3d(volume, prediction, l1_loss) * gd1_lambda
+    loss_total = loss_3d + loss_gd1
+    return loss_total, loss_3d, loss_gd1, prediction, low_resolution, latent
+
+
+@torch.no_grad()
+def evaluate(
+    split: str,
+    model: DecoderPretrainer,
+    loader: DataLoader,
+    device: torch.device,
+    autocast_context: Callable,
+    l1_loss: torch.nn.Module,
+    mse_lambda_3d: float,
+    gd1_lambda: float,
+) -> dict[str, float | int | str]:
+    model.eval()
+    sums = {"loss": 0.0, "loss_3d": 0.0, "loss_gd1": 0.0}
+    sample_count = 0
+    for batch in loader:
+        volume = batch["volume"].to(device, non_blocking=True)
+        with autocast_context():
+            loss, loss_3d, loss_gd1, _, _, _ = calculate_losses(
+                model, volume, l1_loss, mse_lambda_3d, gd1_lambda
+            )
+        current_batch_size = volume.shape[0]
+        sample_count += current_batch_size
+        sums["loss"] += float(loss) * current_batch_size
+        sums["loss_3d"] += float(loss_3d) * current_batch_size
+        sums["loss_gd1"] += float(loss_gd1) * current_batch_size
+
+    model.train()
+    if sample_count == 0:
+        raise RuntimeError(f"The {split} loader produced no samples.")
+    return {
+        "split": split,
+        "samples": sample_count,
+        "loss": sums["loss"] / sample_count,
+        "loss_3d": sums["loss_3d"] / sample_count,
+        "loss_gd1": sums["loss_gd1"] / sample_count,
+    }
+
+
+def write_epoch_tensorboard(
+    writer: SummaryWriter,
+    split: str,
+    metrics: dict[str, float | int | str],
+    epoch_number: int,
+) -> None:
+    writer.add_scalar(f"epoch/{split}_l1_voxel", metrics["loss_3d"], epoch_number)
+    writer.add_scalar(f"epoch/{split}_gradient1", metrics["loss_gd1"], epoch_number)
+    writer.add_scalar(f"epoch/{split}_total", metrics["loss"], epoch_number)
+
+
 def main() -> None:
     args = parse_args()
     if args.batch_size < 1:
         raise ValueError(f"batch-size must be positive, got {args.batch_size}.")
+    if args.val_every < 1 or args.test_every < 1 or args.save_every < 1:
+        raise ValueError("val-every, test-every and save-every must all be positive.")
 
     conf_path = resolve_from_repo(args.conf)
     data_root = resolve_from_repo(args.data_root)
@@ -123,26 +234,26 @@ def main() -> None:
     output_root = Path(args.output_root)
     log_dir = output_root / "logs" / args.run_name
     checkpoint_dir = output_root / "checkpoints" / args.run_name
+    tensorboard_dir = log_dir / "tensorboard"
     log_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    metrics_path = log_dir / "train.jsonl"
+    tensorboard_dir.mkdir(parents=True, exist_ok=True)
+    train_metrics_path = log_dir / "train.jsonl"
+    epoch_metrics_path = log_dir / "epoch.jsonl"
     summary_path = log_dir / "summary.json"
 
-    dataset = DentalVolumeDataset(
-        data_root=str(data_root),
-        split_file=str(split_file),
-        split="train",
-        clamp_min=clamp_min,
-        clamp_max=clamp_max,
-        limit=args.limit,
-    )
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=device.type == "cuda",
-    )
+    common_loader_args = {
+        "data_root": data_root,
+        "split_file": split_file,
+        "clamp_min": clamp_min,
+        "clamp_max": clamp_max,
+        "batch_size": args.batch_size,
+        "num_workers": args.num_workers,
+        "pin_memory": device.type == "cuda",
+    }
+    train_loader = make_loader(split="train", limit=args.limit, **common_loader_args)
+    val_loader = make_loader(split="val", limit=args.eval_limit, **common_loader_args)
+    test_loader = make_loader(split="test", limit=args.eval_limit, **common_loader_args)
 
     model = DecoderPretrainer(conf["model.SRGAN.generator"]).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -151,9 +262,9 @@ def main() -> None:
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
     autocast_context = (
         (lambda: torch.amp.autocast("cuda", dtype=torch.float16))
-        if amp_enabled
-        else nullcontext
+        if amp_enabled else nullcontext
     )
+    writer = SummaryWriter(log_dir=str(tensorboard_dir))
 
     report = parameter_report(model)
     run_config = {
@@ -162,6 +273,10 @@ def main() -> None:
         "repo_root": str(REPO_ROOT),
         "data_root": str(data_root),
         "split_file": str(split_file),
+        "tensorboard_dir": str(tensorboard_dir),
+        "train_subjects": len(train_loader.dataset),
+        "val_subjects": len(val_loader.dataset),
+        "test_subjects": len(test_loader.dataset),
         "device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
         "clamp_min": clamp_min,
         "clamp_max": clamp_max,
@@ -173,103 +288,143 @@ def main() -> None:
     }
     with (log_dir / "config.json").open("w", encoding="utf-8") as handle:
         json.dump(run_config, handle, ensure_ascii=False, indent=2)
-
+    writer.add_text("run/config", json.dumps(run_config, ensure_ascii=False, indent=2), 0)
     print(json.dumps(run_config, ensure_ascii=False, indent=2), flush=True)
+
     model.train()
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
-
     start_time = time.monotonic()
     step = 0
     stop_requested = False
     last_epoch = 0
-    last_metrics: dict[str, float | int | str] = {}
+    last_metrics: dict[str, object] = {}
+    best_val_loss = float("inf")
 
-    for epoch in range(args.epochs):
-        last_epoch = epoch
-        for batch in loader:
-            volume = batch["volume"].to(device, non_blocking=True)
-            subjects = list(batch["subject"])
+    try:
+        for epoch in range(args.epochs):
+            last_epoch = epoch
+            epoch_number = epoch + 1
+            train_sums = {"loss": 0.0, "loss_3d": 0.0, "loss_gd1": 0.0}
+            train_samples = 0
 
-            optimizer.zero_grad(set_to_none=True)
-            with autocast_context():
-                prediction, low_resolution, latent = model(volume)
-                # Same 3D L1 and first-gradient losses as the main project,
-                # vectorized over the complete [B, C, X, Y, Z] batch.
-                loss_3d = l1_loss(prediction, volume) * mse_lambda_3d
-                loss_gd1 = gradient1_loss_3d(volume, prediction, l1_loss) * gd1_lambda
-                loss = loss_3d + loss_gd1
+            for batch in train_loader:
+                volume = batch["volume"].to(device, non_blocking=True)
+                subjects = list(batch["subject"])
+                optimizer.zero_grad(set_to_none=True)
+                with autocast_context():
+                    loss, loss_3d, loss_gd1, prediction, low_resolution, latent = calculate_losses(
+                        model, volume, l1_loss, mse_lambda_3d, gd1_lambda
+                    )
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+                step += 1
+                current_batch_size = volume.shape[0]
+                train_samples += current_batch_size
+                train_sums["loss"] += float(loss.detach()) * current_batch_size
+                train_sums["loss_3d"] += float(loss_3d.detach()) * current_batch_size
+                train_sums["loss_gd1"] += float(loss_gd1.detach()) * current_batch_size
+                elapsed = time.monotonic() - start_time
+                if device.type == "cuda":
+                    peak_allocated_gib = torch.cuda.max_memory_allocated(device) / 1024**3
+                    peak_reserved_gib = torch.cuda.max_memory_reserved(device) / 1024**3
+                else:
+                    peak_allocated_gib = 0.0
+                    peak_reserved_gib = 0.0
 
-            step += 1
-            elapsed = time.monotonic() - start_time
-            if device.type == "cuda":
-                peak_allocated_gib = torch.cuda.max_memory_allocated(device) / 1024**3
-                peak_reserved_gib = torch.cuda.max_memory_reserved(device) / 1024**3
-            else:
-                peak_allocated_gib = 0.0
-                peak_reserved_gib = 0.0
+                last_metrics = {
+                    "timestamp": datetime.now().isoformat(), "epoch": epoch, "step": step,
+                    "subjects": subjects, "elapsed_seconds": elapsed,
+                    "loss": float(loss.detach()), "loss_3d": float(loss_3d.detach()),
+                    "loss_gd1": float(loss_gd1.detach()), "input_shape": list(volume.shape),
+                    "low_resolution_shape": list(low_resolution.shape),
+                    "latent_shape": list(latent.shape), "prediction_shape": list(prediction.shape),
+                    "peak_allocated_gib": peak_allocated_gib,
+                    "peak_reserved_gib": peak_reserved_gib,
+                }
+                append_jsonl(train_metrics_path, last_metrics)
+                print(json.dumps(last_metrics, ensure_ascii=False), flush=True)
+                writer.add_scalar("train_step/l1_voxel", loss_3d, step)
+                writer.add_scalar("train_step/gradient1", loss_gd1, step)
+                writer.add_scalar("train_step/total", loss, step)
+                writer.add_scalar("train_step/learning_rate", optimizer.param_groups[0]["lr"], step)
+                if device.type == "cuda":
+                    writer.add_scalar("memory/peak_allocated_gib", peak_allocated_gib, step)
+                    writer.add_scalar("memory/peak_reserved_gib", peak_reserved_gib, step)
+                if args.max_seconds > 0 and elapsed >= args.max_seconds:
+                    stop_requested = True
+                    break
 
-            last_metrics = {
-                "timestamp": datetime.now().isoformat(),
-                "epoch": epoch,
-                "step": step,
-                "subjects": subjects,
-                "elapsed_seconds": elapsed,
-                "loss": float(loss.detach()),
-                "loss_3d": float(loss_3d.detach()),
-                "loss_gd1": float(loss_gd1.detach()),
-                "input_shape": list(volume.shape),
-                "low_resolution_shape": list(low_resolution.shape),
-                "latent_shape": list(latent.shape),
-                "prediction_shape": list(prediction.shape),
-                "peak_allocated_gib": peak_allocated_gib,
-                "peak_reserved_gib": peak_reserved_gib,
+            if train_samples == 0:
+                raise RuntimeError("The train loader produced no samples.")
+            train_epoch_metrics = {
+                "split": "train", "samples": train_samples,
+                "loss": train_sums["loss"] / train_samples,
+                "loss_3d": train_sums["loss_3d"] / train_samples,
+                "loss_gd1": train_sums["loss_gd1"] / train_samples,
             }
-            with metrics_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(last_metrics, ensure_ascii=False) + os.linesep)
-            print(json.dumps(last_metrics, ensure_ascii=False), flush=True)
+            epoch_record: dict[str, object] = {
+                "timestamp": datetime.now().isoformat(), "epoch": epoch,
+                "train": train_epoch_metrics,
+            }
+            write_epoch_tensorboard(writer, "train", train_epoch_metrics, epoch_number)
 
-            if args.max_seconds > 0 and elapsed >= args.max_seconds:
-                stop_requested = True
-                break
+            # Timed smoke tests stop promptly without adding lengthy eval passes.
+            if not stop_requested and epoch_number % args.val_every == 0:
+                val_metrics = evaluate(
+                    "val", model, val_loader, device, autocast_context,
+                    l1_loss, mse_lambda_3d, gd1_lambda,
+                )
+                epoch_record["val"] = val_metrics
+                write_epoch_tensorboard(writer, "val", val_metrics, epoch_number)
+                if float(val_metrics["loss"]) < best_val_loss:
+                    best_val_loss = float(val_metrics["loss"])
+                    save_checkpoint(
+                        checkpoint_dir / "ckpt_best_val.pt", model, optimizer, scaler,
+                        epoch, step, time.monotonic() - start_time, best_val_loss,
+                    )
 
-        elapsed = time.monotonic() - start_time
-        save_checkpoint(
-            checkpoint_dir / "ckpt_latest.pt",
-            model,
-            optimizer,
-            scaler,
-            epoch,
-            step,
-            elapsed,
-        )
-        if (epoch + 1) % args.save_every == 0:
-            save_checkpoint(
-                checkpoint_dir / f"ckpt_epoch_{epoch + 1:04d}.pt",
-                model,
-                optimizer,
-                scaler,
-                epoch,
-                step,
-                elapsed,
+            should_test = (
+                not stop_requested
+                and (epoch_number % args.test_every == 0 or epoch_number == args.epochs)
             )
-        if stop_requested:
-            break
+            if should_test:
+                test_metrics = evaluate(
+                    "test", model, test_loader, device, autocast_context,
+                    l1_loss, mse_lambda_3d, gd1_lambda,
+                )
+                epoch_record["test"] = test_metrics
+                write_epoch_tensorboard(writer, "test", test_metrics, epoch_number)
+
+            append_jsonl(epoch_metrics_path, epoch_record)
+            print(json.dumps(epoch_record, ensure_ascii=False), flush=True)
+            writer.flush()
+            elapsed = time.monotonic() - start_time
+            save_checkpoint(
+                checkpoint_dir / "ckpt_latest.pt", model, optimizer, scaler,
+                epoch, step, elapsed, best_val_loss,
+            )
+            if epoch_number % args.save_every == 0:
+                save_checkpoint(
+                    checkpoint_dir / f"ckpt_epoch_{epoch_number:04d}.pt",
+                    model, optimizer, scaler, epoch, step, elapsed, best_val_loss,
+                )
+            if stop_requested:
+                break
+    finally:
+        writer.flush()
+        writer.close()
 
     elapsed = time.monotonic() - start_time
     summary = {
-        "completed": True,
-        "stopped_by_time_limit": stop_requested,
-        "epoch": last_epoch,
-        "steps": step,
-        "elapsed_seconds": elapsed,
+        "completed": True, "stopped_by_time_limit": stop_requested,
+        "epoch": last_epoch, "steps": step, "elapsed_seconds": elapsed,
         "latest_checkpoint": str(checkpoint_dir / "ckpt_latest.pt"),
-        **report,
-        "last_metrics": last_metrics,
+        "best_val_checkpoint": str(checkpoint_dir / "ckpt_best_val.pt"),
+        "best_val_loss": None if best_val_loss == float("inf") else best_val_loss,
+        "tensorboard_dir": str(tensorboard_dir), **report, "last_metrics": last_metrics,
     }
     with summary_path.open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, ensure_ascii=False, indent=2)

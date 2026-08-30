@@ -1,14 +1,25 @@
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from models.ResEncoder import ResEncoder
 from models.SRGAN import generator
 from models.aggregator import adafusor, localfusor, meanfusor, varfusor
 
 # Main Model
 class model(nn.Module):
-    def __init__(self, model_conf=None, device=None):
+    def __init__(
+        self,
+        model_conf=None,
+        device=None,
+        query_chunk_size=25000,
+        use_query_checkpoint=True,
+    ):
         super(model, self).__init__()
         self.device = device
+        self.query_chunk_size = int(query_chunk_size)
+        self.use_query_checkpoint = bool(use_query_checkpoint)
+        if self.query_chunk_size <= 0:
+            raise ValueError("query_chunk_size must be positive")
         self.encoder_conf = model_conf['encoder']
         self.decoder_conf = model_conf['SRGAN.generator']
         self.last_layer = model_conf['last_layer']
@@ -31,19 +42,31 @@ class model(nn.Module):
         elif self.last_layer.act == 'GELU':
             self.last_layer_act = nn.GELU()
 
+    def _query_and_fuse_points(self, pnts):
+        latent = self.encoder.queryfeature(pnts)
+        if self.fusion == 'max':
+            return torch.max(latent, dim=0)[0]
+        if self.fusion == 'mean':
+            return torch.mean(latent, dim=0)
+        return self.aggregator(latent)
+
     def query_volume_latent(self, xyz_world):
         x,y,z = xyz_world.shape[:3]                                 # 下采样后的尺寸 [x,y,z]=[X/4,Y/4,Z/4]
         points = xyz_world.contiguous().reshape(-1,3)               # 所有点坐标
-        pnts_split = torch.split(points,100000)                     # 分块省显存
+        pnts_split = torch.split(points, self.query_chunk_size)     # 分块控制融合阶段的瞬时显存
         h = []
         for pnts in pnts_split:
-            latent = self.encoder.queryfeature(pnts)                # ① encoder 特征回投影 [nviews, C, npts]
-            if self.fusion=='max':
-                h.append(torch.max(latent, dim=0)[0])               # ② 聚合多视角特征 [C, npts]
-            elif self.fusion=='mean':
-                h.append(torch.mean(latent, dim=0))                 # ② 聚合多视角特征 [C, npts]
+            if self.training and torch.is_grad_enabled() and self.use_query_checkpoint:
+                # Recompute projection sampling and view fusion during backward
+                # instead of retaining their very large per-point activations.
+                fused = checkpoint(
+                    self._query_and_fuse_points,
+                    pnts,
+                    use_reentrant=False,
+                )
             else:
-                h.append(self.aggregator(latent))                   # ② 聚合多视角特征 [C, npts]
+                fused = self._query_and_fuse_points(pnts)
+            h.append(fused)                                        # ② 聚合多视角特征 [C, npts]
             
         h = torch.cat(h,dim=1)
         return h.reshape(1,-1,x,y,z)                                # ③ 低分辨率特征体积 [1, C, X/4, Y/4, Z/4]

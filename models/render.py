@@ -34,8 +34,8 @@ def get_pixel00_center(detectors, uvectors, vvectors, H, W):
     ## detectors, uvectors, vectors, [N, 3]
     ## pixel00_center, [N, 3]
     device = detectors.device
-    float_H = torch.tensor(H).to(device)
-    float_W = torch.tensor(W).to(device)
+    float_H = torch.as_tensor(H, device=device, dtype=torch.float32)
+    float_W = torch.as_tensor(W, device=device, dtype=torch.float32)
     v_offset = torch.floor(float_H/2) + torch.floor((float_H+1)/2) - (float_H+1)/2
     u_offset = torch.floor(float_W/2) + torch.floor((float_W+1)/2) - (float_W+1)/2
     pixel00_center = detectors - u_offset * uvectors - v_offset * vvectors

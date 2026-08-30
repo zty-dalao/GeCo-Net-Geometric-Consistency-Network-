@@ -24,6 +24,17 @@ def parse_args():
     parser.add_argument("--resume_name", type=str, default=None, help='resume which trained net for evaluate')
     parser.add_argument("--dataname", type=str, default='test', help="evaluate dataname") 
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
+    parser.add_argument(
+        "--query_chunk_size",
+        type=int,
+        default=25000,
+        help="Number of 3D points processed per backprojection/view-fusion chunk",
+    )
+    parser.add_argument(
+        "--no_amp",
+        action="store_true",
+        help="Disable CUDA automatic mixed precision during evaluation",
+    )
 
     args = parser.parse_args()
 

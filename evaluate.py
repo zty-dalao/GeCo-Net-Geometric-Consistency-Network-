@@ -23,11 +23,17 @@ def test_step():
 
     start_time = datetime.datetime.now()
     # 2d projection encoding
-    G_render.encoder(src_images, src_poses)
-    # 3d volume decoding
-    volume_predict = predict_3d_volume(model=G_render, volume_resolution=volume_resolution,
-                                        volume_origin=volume_origin, volume_phy=volume_phy,
-                                        scale=args.eval_scale, device=device)
+    amp_enabled = (
+        str(device).startswith("cuda")
+        and torch.cuda.is_available()
+        and not args.no_amp
+    )
+    with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=amp_enabled):
+        G_render.encoder(src_images, src_poses)
+        # 3d volume decoding
+        volume_predict = predict_3d_volume(model=G_render, volume_resolution=volume_resolution,
+                                            volume_origin=volume_origin, volume_phy=volume_phy,
+                                            scale=args.eval_scale, device=device)
     volume_predict_clamp = torch.clamp(volume_predict, clamp_min, clamp_max)
     end_time = datetime.datetime.now()
     elapse_time = (end_time - start_time).total_seconds()
@@ -65,7 +71,12 @@ if __name__ == '__main__':
     os.makedirs(checkpoints_path, exist_ok=True)
 
     # model
-    G_render = model(model_conf=conf['model'], device=device)
+    G_render = model(
+        model_conf=conf['model'],
+        device=device,
+        query_chunk_size=args.query_chunk_size,
+        use_query_checkpoint=False,
+    )
     if args.resume_name is not None:
         model_path = os.path.join(checkpoints_path, 'ckpt_history', 'ckpt_'+args.resume_name)
         data = torch.load(model_path, map_location=device)

@@ -36,7 +36,12 @@ if __name__ == '__main__':
     )
 
     ## model
-    G_render = model(model_conf=conf['model'], device=device,)
+    G_render = model(
+        model_conf=conf['model'],
+        device=device,
+        query_chunk_size=args.query_chunk_size,
+        use_query_checkpoint=not args.disable_query_checkpoint,
+    )
     if args.pretrained_decoder is not None and not args.resume:
         # Keep duplicated model/optimizer entries in the pretraining checkpoint
         # off the GPU; load_state_dict copies only decoder tensors to the model.

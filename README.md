@@ -96,6 +96,7 @@ python train.py \
   --stage2_epochs 65 \
   --decoder_lr_factor 0.1 \
   --stage3_backbone_lr_factor 0.01 \
+  --query_chunk_size 25000 \
   --soft_lambda 0.5 \
   --soft_window_low -160 \
   --soft_window_high 240
@@ -119,6 +120,9 @@ New arguments:
 | `--soft_lambda` | `0.0` | Additional soft-tissue-window L1 weight. The original attenuation L1 remains active. |
 | `--soft_window_low` | `-160` | Lower HU boundary of the soft-tissue window. |
 | `--soft_window_high` | `240` | Upper HU boundary of the soft-tissue window. |
+| `--query_chunk_size` | `25000` | Number of 3D points processed by backprojection and multi-view fusion at once. Reduce to `12500` if a 32 GB GPU still runs out of memory. |
+| `--disable_query_checkpoint` | off | Disable activation recomputation for backprojection/view fusion. This is faster but requires substantially more memory. |
+| `--no_amp` | off | Disable CUDA mixed precision. Do not use this on a 32 GB GPU unless debugging numerical behavior. |
 
 The soft-tissue loss is an additional normalized HU-window loss; it does not replace
 the original attenuation-space L1, gradient loss, or projection loss. This keeps bone
@@ -157,6 +161,31 @@ ssim_3d_clamp             validation/test only
 
 Validation and test projection losses use fixed uniformly spaced detector samples,
 so their logged values are repeatable rather than changing with random ray indices.
+
+### CUDA out-of-memory in multi-view fusion
+
+The original implementation processed 100,000 queried 3D points at once. With 20
+views and 256 feature channels, `adafusor` constructs a tensor whose effective input
+is approximately `[20, 100000, 768]`, requiring about 5.72 GiB for that allocation
+alone in FP32. The full training path now defaults to:
+
+```text
+query chunk size: 25,000
+mixed precision: enabled on CUDA
+query/fusion activation recomputation: enabled during training
+```
+
+For an RTX 5090 32 GB, start with the default `25000`. If memory still overflows,
+retry with:
+
+```bash
+--query_chunk_size 12500
+```
+
+Do not add `--no_amp` or `--disable_query_checkpoint` in the memory-constrained run.
+The allocator suggestion `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is only
+useful when reserved-but-unused memory is large; it does not solve a genuine 5-6 GiB
+working allocation when only about 4 GiB is free.
 
 ### Resume transfer training
 

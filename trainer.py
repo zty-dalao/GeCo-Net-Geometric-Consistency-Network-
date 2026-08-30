@@ -1,6 +1,7 @@
 import os.path
 import itertools
 import warnings
+from contextlib import nullcontext
 import torch.utils.data
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
@@ -102,6 +103,18 @@ class trainer():
         os.makedirs(self.checkpoints_path, exist_ok=True)
         self.tensorboard_path = os.path.join(self.logs_path, "tensorboard")
         self.writer = SummaryWriter(log_dir=self.tensorboard_path)
+        self.amp_enabled = (
+            str(device).startswith("cuda")
+            and torch.cuda.is_available()
+            and not getattr(args, "no_amp", False)
+        )
+        if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+            try:
+                self.G_scaler = torch.amp.GradScaler("cuda", enabled=self.amp_enabled)
+            except TypeError:
+                self.G_scaler = torch.amp.GradScaler(enabled=self.amp_enabled)
+        else:
+            self.G_scaler = torch.cuda.amp.GradScaler(enabled=self.amp_enabled)
 
         # Frozen training-only teacher that maps downsampled pCT to the exact
         # latent basis learned together with the pretrained decoder.
@@ -189,6 +202,13 @@ class trainer():
         if epoch < self.stage1_epochs + self.stage2_epochs:
             return 2
         return 3
+
+    def _autocast(self):
+        if not self.amp_enabled:
+            return nullcontext()
+        if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
+            return torch.amp.autocast(device_type="cuda", dtype=torch.float16)
+        return torch.cuda.amp.autocast(dtype=torch.float16)
 
     def _lr_multiplier(self, epoch, group_name):
         decay = self.lr_gamma ** (epoch // max(1, self.lr_step_size))
@@ -294,7 +314,8 @@ class trainer():
             stride=self.G_render.decoder.scale,
         )
         with torch.no_grad():
-            return self.prior_stem(low_resolution)
+            with self._autocast():
+                return self.prior_stem(low_resolution)
         
     def save_ckpt(self, epoch):
         data = {
@@ -304,6 +325,7 @@ class trainer():
             'G_render': self.G_render.state_dict(),
             'G_optim': self.G_optim.state_dict(),
             'G_lr_scheduler': self.G_lr_scheduler.state_dict(),
+            'G_scaler': self.G_scaler.state_dict(),
         }
         if self.prior_stem is not None:
             data['prior_stem'] = self.prior_stem.state_dict()
@@ -344,6 +366,8 @@ class trainer():
                         "weights were restored and the staged scheduler was rebuilt.",
                         stacklevel=2,
                     )
+            if 'G_scaler' in data:
+                self.G_scaler.load_state_dict(data['G_scaler'])
 
     def train_step(self, data, epoch):
         self._apply_training_stage(epoch)
@@ -367,17 +391,18 @@ class trainer():
         loss_dict = {}
         
         # 2d projection encoding
-        self.G_render.encoder(src_images, src_poses)    # model的ResEncoder
-        # 3d volume decoding
-        volume_predict, projection_latent = predict_3d_volume(
-            model=self.G_render,
-            volume_resolution=volume_resolution,
-            volume_origin=volume_origin,
-            volume_phy=volume_phy,
-            scale=self.G_render.decoder.scale,
-            device=device,
-            return_latent=True,
-        )
+        with self._autocast():
+            self.G_render.encoder(src_images, src_poses)    # model的ResEncoder
+            # 3d volume decoding
+            volume_predict, projection_latent = predict_3d_volume(
+                model=self.G_render,
+                volume_resolution=volume_resolution,
+                volume_origin=volume_origin,
+                volume_phy=volume_phy,
+                scale=self.G_render.decoder.scale,
+                device=device,
+                return_latent=True,
+            )
 
         self.G_optim.zero_grad()
         # 3d loss，体素空间级别的L1 loss
@@ -444,7 +469,7 @@ class trainer():
             proj_gt = images_gt_all[pix_inds]
             src_rays = get_rays(src_poses, H, W)
             proj_rays = src_rays.view(-1, src_rays.shape[-1])[pix_inds].to(device=device)
-            proj_predict = composite(rays=proj_rays, volume=volume_predict, volume_origin=volume_origin,
+            proj_predict = composite(rays=proj_rays, volume=volume_predict.float(), volume_origin=volume_origin,
                                         volume_phy=volume_phy, render_step_size=render_step_size, 
                                         chunksize=self.chunksize).reshape(proj_gt.shape)
             if self.expnorm:
@@ -458,8 +483,9 @@ class trainer():
         loss_dict['G_loss'] = round(G_loss.item(), 8)
 
         # update model
-        G_loss.backward()
-        self.G_optim.step()
+        self.G_scaler.scale(G_loss).backward()
+        self.G_scaler.step(self.G_optim)
+        self.G_scaler.update()
 
         self.writer.add_scalar("step/train_total", G_loss.detach(), self.global_step)
         for key in (
@@ -480,10 +506,11 @@ class trainer():
         # first set G_render to eval state, calculate the PSNR, and turn it back to train state
         self.G_render.eval()
         with torch.no_grad():
-            self.G_render.encoder(src_images, src_poses)
-            volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
-                                               volume_origin=volume_origin, volume_phy=volume_phy,
-                                               scale=self.G_render.decoder.scale, device=device)
+            with self._autocast():
+                self.G_render.encoder(src_images, src_poses)
+                volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
+                                                   volume_origin=volume_origin, volume_phy=volume_phy,
+                                                   scale=self.G_render.decoder.scale, device=device)
             volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
             # 3d ssim calculation is too slow, so we only calculate psnr
             loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
@@ -514,17 +541,18 @@ class trainer():
         }
 
         # 2d projection encoding
-        self.G_render.encoder(src_images, src_poses)
-        # 3d volume decoding
-        volume_predict, projection_latent = predict_3d_volume(
-            model=self.G_render,
-            volume_resolution=volume_resolution,
-            volume_origin=volume_origin,
-            volume_phy=volume_phy,
-            scale=self.G_render.decoder.scale,
-            device=device,
-            return_latent=True,
-        )
+        with self._autocast():
+            self.G_render.encoder(src_images, src_poses)
+            # 3d volume decoding
+            volume_predict, projection_latent = predict_3d_volume(
+                model=self.G_render,
+                volume_resolution=volume_resolution,
+                volume_origin=volume_origin,
+                volume_phy=volume_phy,
+                scale=self.G_render.decoder.scale,
+                device=device,
+                return_latent=True,
+            )
         
         # metrics calculation
         volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
@@ -596,7 +624,7 @@ class trainer():
             proj_rays = src_rays.reshape(-1, src_rays.shape[-1])[pix_inds]
             proj_predict = composite(
                 rays=proj_rays,
-                volume=volume_predict,
+                volume=volume_predict.float(),
                 volume_origin=volume_origin,
                 volume_phy=volume_phy,
                 render_step_size=render_step_size,
@@ -637,11 +665,12 @@ class trainer():
         }
 
         # 2d projection encoding
-        self.G_render.encoder(src_images, src_poses)
-        # 3d volume decoding
-        volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
-                                            volume_origin=volume_origin, volume_phy=volume_phy,
-                                            scale=self.G_render.decoder.scale, device=device)
+        with self._autocast():
+            self.G_render.encoder(src_images, src_poses)
+            # 3d volume decoding
+            volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
+                                               volume_origin=volume_origin, volume_phy=volume_phy,
+                                               scale=self.G_render.decoder.scale, device=device)
 
         # alculate metrics with clamped volume for more accurate evaluation
         volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)

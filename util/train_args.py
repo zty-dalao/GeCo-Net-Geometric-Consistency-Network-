@@ -77,6 +77,22 @@ def parse_args():
     )
     parser.add_argument("--soft_window_low", type=float, default=-160.0, help="Soft-tissue HU window lower bound")
     parser.add_argument("--soft_window_high", type=float, default=240.0, help="Soft-tissue HU window upper bound")
+    parser.add_argument(
+        "--query_chunk_size",
+        type=int,
+        default=25000,
+        help="Number of 3D points processed per backprojection/view-fusion chunk",
+    )
+    parser.add_argument(
+        "--disable_query_checkpoint",
+        action="store_true",
+        help="Disable activation recomputation for backprojection/view fusion (uses more GPU memory)",
+    )
+    parser.add_argument(
+        "--no_amp",
+        action="store_true",
+        help="Disable CUDA automatic mixed precision (uses substantially more GPU memory)",
+    )
 
     args = parser.parse_args()
 
@@ -120,6 +136,9 @@ def parse_args():
         'stage3_backbone_lr_factor: ', str(args.stage3_backbone_lr_factor), '\n',
         'soft_lambda: ', str(args.soft_lambda), '\n',
         'soft_window: [', str(args.soft_window_low), ', ', str(args.soft_window_high), '] HU\n',
+        'query_chunk_size: ', str(args.query_chunk_size), '\n',
+        'query_checkpoint: ', "no" if args.disable_query_checkpoint else "yes", '\n',
+        'amp: ', "no" if args.no_amp else "yes", '\n',
     ])
 
     exp_state = ''.join(exp_state_list) # 拼接并打印到终端（''.join(exp_state_list)）

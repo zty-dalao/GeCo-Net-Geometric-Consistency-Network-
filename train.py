@@ -37,6 +37,17 @@ if __name__ == '__main__':
 
     ## model
     G_render = model(model_conf=conf['model'], device=device,)
+    if args.pretrained_decoder is not None and not args.resume:
+        # Keep duplicated model/optimizer entries in the pretraining checkpoint
+        # off the GPU; load_state_dict copies only decoder tensors to the model.
+        pretrained = torch.load(args.pretrained_decoder, map_location="cpu")
+        if "decoder" not in pretrained:
+            raise KeyError(
+                f"Pretraining checkpoint {args.pretrained_decoder!r} has no 'decoder' key."
+            )
+        G_render.decoder.load_state_dict(pretrained["decoder"], strict=True)
+        print(f"Loaded pretrained decoder: {args.pretrained_decoder}")
+        del pretrained
     net_trainer = trainer(G_render,train_data_loader,val_data_loader,
     test_data_loader,visual_data_loader,args,conf,device)
     net_trainer.start()

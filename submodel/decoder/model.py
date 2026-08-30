@@ -5,6 +5,18 @@ import torch.nn.functional as F
 from models.SRGAN import generator
 
 
+class PriorFeatureStem(nn.Sequential):
+    """Map a fixed low-resolution pCT volume to the decoder latent space."""
+
+    def __init__(self, inplanes: int = 256) -> None:
+        super().__init__(
+            nn.Conv3d(1, 64, kernel_size=3, stride=1, padding=1),
+            nn.GELU(),
+            nn.Conv3d(64, int(inplanes), kernel_size=3, stride=1, padding=1),
+            nn.GELU(),
+        )
+
+
 class DecoderPretrainer(nn.Module):
     """Pretrain the project's decoder from irreversibly degraded pCT volumes.
 
@@ -30,12 +42,7 @@ class DecoderPretrainer(nn.Module):
                 f"Decoder pretraining expects 256 latent channels, got {self.inplanes}."
             )
 
-        self.feature_stem = nn.Sequential(
-            nn.Conv3d(1, 64, kernel_size=3, stride=1, padding=1),
-            nn.GELU(),
-            nn.Conv3d(64, self.inplanes, kernel_size=3, stride=1, padding=1),
-            nn.GELU(),
-        )
+        self.feature_stem = PriorFeatureStem(self.inplanes)
         # Reuse the exact decoder class used by models/model.py.
         self.decoder = generator(decoder_conf)
         self.output_activation = nn.GELU()

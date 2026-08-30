@@ -210,8 +210,8 @@ def make_coords(volume_resolution, volume_phy, volume_origin, device):
     xyz = torch.stack([grid_x, grid_y, grid_z], dim=-1).to(torch.float32)
     return xyz
 
-def predict_3d_volume(model,volume_resolution,volume_origin,volume_phy,scale,device):
+def predict_3d_volume(model,volume_resolution,volume_origin,volume_phy,scale,device,return_latent=False):
     xyz = make_coords(volume_resolution.tolist(), volume_phy.tolist(), volume_origin.tolist(), device)  # 生成全分辨率世界坐标网格，形状 [X, Y, Z, 3]（如 [128,128,128,3]）
     xyz_sample = xyz[::scale, ::scale, ::scale, :]                                                      # 按 scale 步长空间下采样坐标网格 → [X/4, Y/4, Z/4, 3]
-    volume_predict = model(xyz_sample)                                                                  # 只在下采样后的稀疏坐标点上做特征查询 + 聚合 + 解码
+    volume_predict = model(xyz_sample, return_latent=return_latent)                                     # 只在下采样后的稀疏坐标点上做特征查询 + 聚合 + 解码
     return volume_predict

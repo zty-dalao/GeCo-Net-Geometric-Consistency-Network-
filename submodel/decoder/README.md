@@ -29,7 +29,35 @@ loads only ground-truth volumes.
 
 ## Training
 
-Run from the repository root. A suggested RTX 5090 command is:
+Install dependencies from the repository root. The requirements select a
+PyTorch CUDA 12.8 build so that Blackwell/RTX 5090 is supported:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Verify the environment before training:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0))"
+```
+
+Run from the repository root. A suggested RTX 5090 command in **Linux Bash**
+is shown below. Bash uses a backslash as the final character on each continued
+line; do not put spaces after it.
+
+```bash
+python -m submodel.decoder.train \
+  --run-name dental_batch3 \
+  --device cuda \
+  --batch-size 3 \
+  --epochs 100 \
+  --val-every 1 \
+  --test-every 10 \
+  --save-every 5
+```
+
+The equivalent command in **Windows PowerShell** uses backticks:
 
 ```powershell
 python -m submodel.decoder.train `
@@ -42,15 +70,21 @@ python -m submodel.decoder.train `
   --save-every 5
 ```
 
-For a small timed smoke test:
+The most portable form is a single line:
 
-```powershell
-python -m submodel.decoder.train `
-  --run-name dental_smoke_60s `
-  --device cuda `
-  --batch-size 1 `
-  --limit 1 `
-  --eval-limit 1 `
+```bash
+python -m submodel.decoder.train --run-name dental_batch3 --device cuda --batch-size 3 --epochs 100 --val-every 1 --test-every 10 --save-every 5
+```
+
+For a small timed smoke test in Bash:
+
+```bash
+python -m submodel.decoder.train \
+  --run-name dental_smoke_60s \
+  --device cuda \
+  --batch-size 1 \
+  --limit 1 \
+  --eval-limit 1 \
   --max-seconds 60
 ```
 
@@ -139,10 +173,16 @@ ckpt_best_val.pt     lowest validation total loss
 ckpt_epoch_NNNN.pt   periodic history checkpoint
 ```
 
-Every checkpoint contains a top-level `decoder` state dictionary that loads
-directly into `models.model.decoder`:
+Every checkpoint contains separate `decoder` and `feature_stem` state dictionaries.
+`decoder` loads directly into `models.model.decoder`; the frozen `feature_stem`
+can generate the pCT latent target during full-model transfer training:
 
 ```python
 checkpoint = torch.load(checkpoint_path, map_location=device)
 G_render.decoder.load_state_dict(checkpoint["decoder"], strict=True)
+prior_stem.load_state_dict(checkpoint["feature_stem"], strict=True)
 ```
+
+See the root `README.md` section **Transfer the pCT-pretrained decoder into the
+full model** for latent alignment, three-stage training, soft-tissue-window loss,
+TensorBoard tags, resume commands, and inference.

@@ -27,6 +27,56 @@ def parse_args():
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
     parser.add_argument("--gd1_lambda", type=float, default=1.0, help='weight for gradient loss')
     parser.add_argument("--mse_lambda_2d", type=float, default=0.01, help='weight for projection loss')  
+    parser.add_argument(
+        "--pretrained_decoder",
+        type=str,
+        default=None,
+        help="Decoder-pretraining checkpoint containing decoder and feature_stem keys",
+    )
+    parser.add_argument(
+        "--latent_lambda",
+        type=float,
+        default=0.0,
+        help="Stage-1 weight of normalized latent alignment loss; requires --pretrained_decoder",
+    )
+    parser.add_argument(
+        "--latent_cosine_lambda",
+        type=float,
+        default=0.1,
+        help="Cosine term inside the latent alignment loss",
+    )
+    parser.add_argument(
+        "--stage1_epochs",
+        type=int,
+        default=15,
+        help="Number of initial epochs with the full decoder frozen",
+    )
+    parser.add_argument(
+        "--stage2_epochs",
+        type=int,
+        default=65,
+        help="Number of joint-training epochs after stage 1; remaining epochs are stage 3",
+    )
+    parser.add_argument(
+        "--decoder_lr_factor",
+        type=float,
+        default=0.1,
+        help="Decoder learning-rate multiplier during stages 2 and 3",
+    )
+    parser.add_argument(
+        "--stage3_backbone_lr_factor",
+        type=float,
+        default=0.01,
+        help="Encoder/aggregator learning-rate multiplier in stage 3; set 0 to freeze them",
+    )
+    parser.add_argument(
+        "--soft_lambda",
+        type=float,
+        default=0.0,
+        help="Weight of the additional normalized soft-tissue-window L1 loss",
+    )
+    parser.add_argument("--soft_window_low", type=float, default=-160.0, help="Soft-tissue HU window lower bound")
+    parser.add_argument("--soft_window_high", type=float, default=240.0, help="Soft-tissue HU window upper bound")
 
     args = parser.parse_args()
 
@@ -59,6 +109,18 @@ def parse_args():
                      'mse_lambda_2d: ', str(conf['train.G_loss.mse_lambda_2d']), '\n',
                      'mse_lambda_3d: ', str(conf['train.G_loss.mse_lambda_3d']), '\n',
                      'gd1_lambda: ', str(conf['train.G_loss.gd1_lambda']), '\n']
+
+    exp_state_list.extend([
+        'pretrained_decoder: ', str(args.pretrained_decoder), '\n',
+        'latent_lambda: ', str(args.latent_lambda), '\n',
+        'latent_cosine_lambda: ', str(args.latent_cosine_lambda), '\n',
+        'stage1_epochs: ', str(args.stage1_epochs), '\n',
+        'stage2_epochs: ', str(args.stage2_epochs), '\n',
+        'decoder_lr_factor: ', str(args.decoder_lr_factor), '\n',
+        'stage3_backbone_lr_factor: ', str(args.stage3_backbone_lr_factor), '\n',
+        'soft_lambda: ', str(args.soft_lambda), '\n',
+        'soft_window: [', str(args.soft_window_low), ', ', str(args.soft_window_high), '] HU\n',
+    ])
 
     exp_state = ''.join(exp_state_list) # 拼接并打印到终端（''.join(exp_state_list)）
     print(exp_state)

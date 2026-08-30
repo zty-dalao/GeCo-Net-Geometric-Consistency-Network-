@@ -6,7 +6,7 @@ import time
 from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 from pyhocon import ConfigFactory
@@ -81,7 +81,7 @@ def save_checkpoint(
     path: Path,
     model: DecoderPretrainer,
     optimizer: torch.optim.Optimizer,
-    scaler: torch.amp.GradScaler,
+    scaler: Any,
     epoch: int,
     step: int,
     elapsed_seconds: float,
@@ -201,6 +201,21 @@ def write_epoch_tensorboard(
     writer.add_scalar(f"epoch/{split}_total", metrics["loss"], epoch_number)
 
 
+def make_grad_scaler(enabled: bool):
+    """Use the current AMP API when available, with a PyTorch 2.1 fallback."""
+    if hasattr(torch.amp, "GradScaler"):
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
+def make_autocast_context(enabled: bool) -> Callable:
+    if not enabled:
+        return nullcontext
+    if hasattr(torch, "autocast"):
+        return lambda: torch.autocast(device_type="cuda", dtype=torch.float16)
+    return lambda: torch.cuda.amp.autocast(dtype=torch.float16)
+
+
 def main() -> None:
     args = parse_args()
     if args.batch_size < 1:
@@ -259,11 +274,8 @@ def main() -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     l1_loss = torch.nn.L1Loss(reduction="mean")
     amp_enabled = device.type == "cuda" and not args.no_amp
-    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
-    autocast_context = (
-        (lambda: torch.amp.autocast("cuda", dtype=torch.float16))
-        if amp_enabled else nullcontext
-    )
+    scaler = make_grad_scaler(amp_enabled)
+    autocast_context = make_autocast_context(amp_enabled)
     writer = SummaryWriter(log_dir=str(tensorboard_dir))
 
     report = parameter_report(model)

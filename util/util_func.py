@@ -5,7 +5,9 @@ import math
 from skimage.metrics import structural_similarity
 
 def tensor2nii(tensor, dst_nii, spacing=None, origin=None):
-    img = tensor.cpu().detach().numpy()
+    # AMP inference returns float16 tensors, while SimpleITK does not support
+    # constructing an image from NumPy float16. NIfTI output uses float32.
+    img = tensor.detach().to(device="cpu", dtype=torch.float32).numpy()
     image = sitk.GetImageFromArray(img)
     if spacing is not None:
         image.SetSpacing(spacing)

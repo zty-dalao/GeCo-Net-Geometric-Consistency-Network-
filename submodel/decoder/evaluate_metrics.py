@@ -38,6 +38,14 @@ def parse_args():
     parser.add_argument("--air-upper-hu", type=float, default=-500.0)
     parser.add_argument("--bone-lower-hu", type=float, default=300.0)
     parser.add_argument("--output-dir", default=None, help="Default: submodel/decoder/metrics/<checkpoint-stem>")
+    parser.add_argument(
+        "--save-volumes",
+        action="store_true",
+        help=(
+            "Save each generated sCT and its full-resolution pCT target as HU NIfTI files. "
+            "This can require several GB for all validation/test cases."
+        ),
+    )
     parser.add_argument("--no-amp", action="store_true")
     return parser.parse_args()
 
@@ -93,6 +101,9 @@ def metrics_for_case(
         "global_mse_normalized": global_mse,
         "global_rmse_hu": float(torch.sqrt(squared_error_hu.mean()).item()),
         "global_psnr_db": _safe_psnr(global_mse),
+        # Explicit alias: the decoder output is the synthesized CT-like volume
+        # and target_mu is the complete pCT/CT volume used for pretraining.
+        "sct_vs_pct_psnr_db": _safe_psnr(global_mse),
     }
     masks = {
         "air": hu_target < air_upper_hu,
@@ -163,7 +174,7 @@ def print_split_summary(split: str, summary: dict[str, object]) -> None:
     variance = summary["variance"]
     print(
         f"{split}: cases={summary['cases']}, "
-        f"PSNR={mean['global_psnr_db']:.4f}±{summary['std']['global_psnr_db']:.4f} dB, "
+        f"sCT-vs-pCT PSNR={mean['sct_vs_pct_psnr_db']:.4f}±{summary['std']['sct_vs_pct_psnr_db']:.4f} dB, "
         f"MAE={mean['global_mae_hu']:.2f} HU"
     )
     for region in ("air", "tissue", "bone"):
@@ -173,6 +184,29 @@ def print_split_summary(split: str, summary: dict[str, object]) -> None:
             f"MAE={mean[region + '_mae_hu']:.2f} HU, "
             f"oracle gain={mean[region + '_oracle_psnr_gain_db']:.3f} dB"
         )
+
+
+def save_case_volumes(
+    prediction_mu: torch.Tensor,
+    target_mu: torch.Tensor,
+    target_path: Path,
+    output_dir: Path,
+) -> None:
+    """Save XYZ tensors as HU NIfTI files with the pCT target metadata."""
+    import SimpleITK as sitk
+
+    reference = sitk.ReadImage(str(target_path))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for filename, volume_mu in (
+        ("sct_predict_hu.nii.gz", prediction_mu),
+        ("pct_gt_hu.nii.gz", target_mu),
+    ):
+        # Dataset/model tensors are XYZ; SimpleITK array storage is ZYX.
+        volume_mu = volume_mu.squeeze(0)  # remove the single channel: [X, Y, Z]
+        volume_hu_zyx = mu_to_hu(volume_mu.float()).permute(2, 1, 0).cpu().numpy()
+        image = sitk.GetImageFromArray(volume_hu_zyx.astype(np.float32, copy=False))
+        image.CopyInformation(reference)
+        sitk.WriteImage(image, str(output_dir / filename))
 
 
 def main():
@@ -224,6 +258,7 @@ def main():
         ],
         "air_upper_hu": args.air_upper_hu,
         "bone_lower_hu": args.bone_lower_hu,
+        "save_volumes": args.save_volumes,
     }
     all_summaries = {}
     with torch.no_grad():
@@ -242,12 +277,21 @@ def main():
                 with autocast_context():
                     prediction, _, _ = model(volume)
                 for index, subject in enumerate(batch["subject"]):
+                    prediction_case = torch.clamp(prediction[index], clamp_min, clamp_max)
+                    target_case = volume[index]
                     record: dict[str, object] = {"subject": str(subject)}
                     record.update(metrics_for_case(
-                        prediction[index], volume[index], clamp_min, clamp_max,
+                        prediction_case, target_case, clamp_min, clamp_max,
                         args.air_upper_hu, args.bone_lower_hu,
                     ))
                     records.append(record)
+                    if args.save_volumes:
+                        save_case_volumes(
+                            prediction_case,
+                            target_case,
+                            data_root / str(subject) / "gt_volume.nii.gz",
+                            output_dir / "volumes" / split / str(subject),
+                        )
             summary = summarise(records)
             all_summaries[split] = summary
             write_jsonl(output_dir / f"{split}_per_case.jsonl", records)

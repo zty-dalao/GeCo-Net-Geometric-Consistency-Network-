@@ -20,12 +20,28 @@ The loss matches the main project's 3D supervision:
 ```text
 total loss = mse_lambda_3d * voxel L1
            + gd1_lambda * first-gradient L1
+           + bone_lambda * GT-bone-mask normalized L1
+           + soft_mask_lambda * GT-soft-mask window-normalized L1
 ```
 
 Despite its historical config name, `mse_lambda_3d` weights an L1 loss in this
 repository. Both terms operate on the complete `[B, 1, X, Y, Z]` batch. The
 projection-domain 2D loss is not used because decoder pretraining intentionally
 loads only ground-truth volumes.
+
+The two regional terms are disabled by default (`bone_lambda=0` and
+`soft_mask_lambda=0`), preserving the previous objective and full checkpoint
+compatibility. Their masks are defined **only from GT HU**. Predictions are not
+clamped before these terms are calculated, so a predicted voxel outside the
+target region still receives a gradient back toward its correct value.
+
+```text
+bone mask:       GT HU >= bone_lower_hu                 (default 300 HU)
+bone raw loss:   mean_mask(|pred_mu - gt_mu| / (mu_max - mu_min))
+
+soft mask:       soft_window_low <= GT HU < soft_window_high
+soft raw loss:   mean_mask(|pred_HU - gt_HU| / window_width)
+```
 
 ## Training
 
@@ -101,12 +117,17 @@ checkpoint for 50 epochs with a lower learning rate:
 
 ```bash
 python -m submodel.decoder.train \
-  --run-name dental_batch3 \
+  --run-name dental_batch3_region_refine \
   --device cuda \
   --batch-size 3 \
   --resume submodel/decoder/checkpoints/dental_batch3/ckpt_best_val.pt \
   --epochs 50 \
   --lr 2e-5 \
+  --bone-lambda 0.05 \
+  --bone-lower-hu 300 \
+  --soft-mask-lambda 0.01 \
+  --soft-window-low -160 \
+  --soft-window-high 240 \
   --val-every 1 \
   --test-every 10 \
   --save-every 5
@@ -114,7 +135,11 @@ python -m submodel.decoder.train \
 
 Use `ckpt_latest.pt` instead of `ckpt_best_val.pt` only when the intent is to
 continue exactly from the final epoch, rather than from the best validation
-model.
+model. A new `--run-name` is recommended for a changed loss function so that
+the original checkpoint and TensorBoard curves remain intact. When a resumed
+checkpoint uses a different stored loss configuration, the best validation
+loss is reset automatically because old and new total losses are not
+comparable.
 
 ## Command-line parameters
 
@@ -133,6 +158,11 @@ model.
 | `--resume` | none | Checkpoint to restore. With this option, `--epochs` is the number of additional epochs. A supplied `--lr` replaces the learning rate stored in the checkpoint. |
 | `--mse-lambda-3d` | config value (`1.0`) | Weight of the voxel-wise L1 loss. The name is retained for compatibility with the original project. |
 | `--gd1-lambda` | config value (`1.0`) | Weight of the first-order spatial-gradient L1 loss. |
+| `--bone-lambda` | `0` | Weight of the GT-defined bone-region loss. `0` exactly reproduces the old objective. Start with `0.05` for refinement. |
+| `--bone-lower-hu` | `300` | GT threshold defining the bone mask. Prediction HU is never used to choose this mask. |
+| `--soft-mask-lambda` | `0` | Weight of the GT-defined soft-tissue-mask loss. `0` exactly reproduces the old objective. Start with `0.01` for refinement. |
+| `--soft-window-low` | `-160` | Lower HU bound of the GT soft-tissue mask. |
+| `--soft-window-high` | `240` | Upper HU bound of the GT soft-tissue mask. |
 | `--max-seconds` | `0` | Wall-clock training limit in seconds; `0` disables it. Intended for smoke tests, not normal training. |
 | `--limit` | all | Maximum number of training subjects to use. Intended for smoke tests. |
 | `--eval-limit` | all | Maximum number of subjects used from each of the validation and test splits. |
@@ -160,17 +190,33 @@ The recorded scalars are:
 ```text
 train_step/l1_voxel
 train_step/gradient1
+train_step/bone_gt_mask
+train_step/bone_gt_mask_raw
+train_step/soft_mask
+train_step/soft_mask_raw
 train_step/total
 train_step/learning_rate
 
 epoch/train_l1_voxel
 epoch/train_gradient1
+epoch/train_bone_gt_mask
+epoch/train_bone_gt_mask_raw
+epoch/train_soft_mask
+epoch/train_soft_mask_raw
 epoch/train_total
 epoch/val_l1_voxel
 epoch/val_gradient1
+epoch/val_bone_gt_mask
+epoch/val_bone_gt_mask_raw
+epoch/val_soft_mask
+epoch/val_soft_mask_raw
 epoch/val_total
 epoch/test_l1_voxel
 epoch/test_gradient1
+epoch/test_bone_gt_mask
+epoch/test_bone_gt_mask_raw
+epoch/test_soft_mask
+epoch/test_soft_mask_raw
 epoch/test_total
 
 memory/peak_allocated_gib
@@ -221,7 +267,8 @@ pretrained decoder:
 python -m submodel.decoder.evaluate_metrics \
   --checkpoint submodel/decoder/checkpoints/dental_batch3/ckpt_best_val.pt \
   --device cuda \
-  --batch-size 3
+  --batch-size 3 \
+  --save-volumes
 ```
 
 Metrics use the shared dental physical range `[-1000, 3095] HU`, not separate
@@ -234,3 +281,10 @@ the theoretical PSNR gain if one region's error were removed. `mse_share` is
 the region's actual contribution to global MSE and therefore the relevant
 quantity for diagnosing the PSNR bottleneck. Region-level oracle gains cannot
 be added together because PSNR is logarithmic.
+
+Each per-case record includes `sct_vs_pct_psnr_db`, which is the fixed-range
+PSNR between the generated Decoder output and its full-resolution pCT target.
+With `--save-volumes`, inference volumes are additionally written as
+`volumes/<split>/<subject>/sct_predict_hu.nii.gz` and `pct_gt_hu.nii.gz`, both
+in HU and with the source pCT NIfTI metadata. These files are sizeable; omit
+`--save-volumes` when only numerical metrics are needed.

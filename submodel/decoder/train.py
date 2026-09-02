@@ -50,6 +50,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gd1-lambda", type=float, default=None)
     parser.add_argument("--mse-lambda-3d", type=float, default=None)
     parser.add_argument(
+        "--bone-lambda",
+        type=float,
+        default=0.0,
+        help="Weight of the GT-defined bone-region normalized L1 loss; 0 preserves legacy training.",
+    )
+    parser.add_argument(
+        "--bone-lower-hu",
+        type=float,
+        default=300.0,
+        help="GT HU threshold: voxels at or above this value are bone for --bone-lambda.",
+    )
+    parser.add_argument(
+        "--soft-mask-lambda",
+        type=float,
+        default=0.0,
+        help="Weight of the GT-defined soft-tissue-mask L1 loss; 0 preserves legacy training.",
+    )
+    parser.add_argument("--soft-window-low", type=float, default=-160.0)
+    parser.add_argument("--soft-window-high", type=float, default=240.0)
+    parser.add_argument(
         "--max-seconds",
         type=float,
         default=0.0,
@@ -95,6 +115,7 @@ def save_checkpoint(
     step: int,
     elapsed_seconds: float,
     best_val_loss: float,
+    loss_config: dict[str, float],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -103,6 +124,7 @@ def save_checkpoint(
             "step": step,
             "elapsed_seconds": elapsed_seconds,
             "best_val_loss": best_val_loss,
+            "loss_config": loss_config,
             "model": model.state_dict(),
             # This key loads directly into models.model.decoder.
             "decoder": model.decoder.state_dict(),
@@ -147,18 +169,72 @@ def make_loader(
     )
 
 
+def mu_to_hu(volume: torch.Tensor) -> torch.Tensor:
+    return (volume / 0.022 - 1.0) * 1000.0
+
+
+def masked_l1(error: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Mean absolute error over a GT-defined mask, including valid gradients outside it."""
+    mask = mask.to(dtype=error.dtype)
+    return (error * mask).sum() / mask.sum().clamp_min(1.0)
+
+
 def calculate_losses(
     model: DecoderPretrainer,
     volume: torch.Tensor,
     l1_loss: torch.nn.Module,
     mse_lambda_3d: float,
     gd1_lambda: float,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    bone_lambda: float,
+    bone_lower_hu: float,
+    soft_mask_lambda: float,
+    soft_window_low: float,
+    soft_window_high: float,
+    clamp_min: float,
+    clamp_max: float,
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+]:
     prediction, low_resolution, latent = model(volume)
     loss_3d = l1_loss(prediction, volume) * mse_lambda_3d
     loss_gd1 = gradient1_loss_3d(volume, prediction, l1_loss) * gd1_lambda
-    loss_total = loss_3d + loss_gd1
-    return loss_total, loss_3d, loss_gd1, prediction, low_resolution, latent
+    prediction_fp32 = prediction.float()
+    volume_fp32 = volume.float()
+    hu_prediction = mu_to_hu(prediction_fp32)
+    hu_target = mu_to_hu(volume_fp32)
+    zero = loss_3d.new_zeros(())
+
+    # Masks come only from GT. Crucially, prediction is not clamped before the
+    # error is measured, so a prediction outside either region still receives
+    # a gradient that pulls it back toward the GT HU value.
+    if bone_lambda > 0:
+        bone_mask = hu_target >= bone_lower_hu
+        bone_raw = masked_l1(
+            torch.abs(prediction_fp32 - volume_fp32) / (clamp_max - clamp_min),
+            bone_mask,
+        )
+        loss_bone = bone_raw * bone_lambda
+    else:
+        bone_raw = zero
+        loss_bone = zero
+
+    if soft_mask_lambda > 0:
+        soft_mask = (hu_target >= soft_window_low) & (hu_target < soft_window_high)
+        soft_raw = masked_l1(
+            torch.abs(hu_prediction - hu_target) / (soft_window_high - soft_window_low),
+            soft_mask,
+        )
+        loss_soft_mask = soft_raw * soft_mask_lambda
+    else:
+        soft_raw = zero
+        loss_soft_mask = zero
+
+    loss_total = loss_3d + loss_gd1 + loss_bone + loss_soft_mask
+    return (
+        loss_total, loss_3d, loss_gd1, loss_bone, loss_soft_mask,
+        bone_raw, soft_raw, prediction, low_resolution, latent,
+    )
 
 
 @torch.no_grad()
@@ -171,21 +247,38 @@ def evaluate(
     l1_loss: torch.nn.Module,
     mse_lambda_3d: float,
     gd1_lambda: float,
+    bone_lambda: float,
+    bone_lower_hu: float,
+    soft_mask_lambda: float,
+    soft_window_low: float,
+    soft_window_high: float,
+    clamp_min: float,
+    clamp_max: float,
 ) -> dict[str, float | int | str]:
     model.eval()
-    sums = {"loss": 0.0, "loss_3d": 0.0, "loss_gd1": 0.0}
+    sums = {
+        "loss": 0.0, "loss_3d": 0.0, "loss_gd1": 0.0,
+        "loss_bone": 0.0, "loss_soft_mask": 0.0,
+        "bone_raw": 0.0, "soft_mask_raw": 0.0,
+    }
     sample_count = 0
     for batch in loader:
         volume = batch["volume"].to(device, non_blocking=True)
         with autocast_context():
-            loss, loss_3d, loss_gd1, _, _, _ = calculate_losses(
-                model, volume, l1_loss, mse_lambda_3d, gd1_lambda
+            loss, loss_3d, loss_gd1, loss_bone, loss_soft_mask, bone_raw, soft_raw, _, _, _ = calculate_losses(
+                model, volume, l1_loss, mse_lambda_3d, gd1_lambda,
+                bone_lambda, bone_lower_hu, soft_mask_lambda,
+                soft_window_low, soft_window_high, clamp_min, clamp_max,
             )
         current_batch_size = volume.shape[0]
         sample_count += current_batch_size
         sums["loss"] += float(loss) * current_batch_size
         sums["loss_3d"] += float(loss_3d) * current_batch_size
         sums["loss_gd1"] += float(loss_gd1) * current_batch_size
+        sums["loss_bone"] += float(loss_bone) * current_batch_size
+        sums["loss_soft_mask"] += float(loss_soft_mask) * current_batch_size
+        sums["bone_raw"] += float(bone_raw) * current_batch_size
+        sums["soft_mask_raw"] += float(soft_raw) * current_batch_size
 
     model.train()
     if sample_count == 0:
@@ -196,6 +289,10 @@ def evaluate(
         "loss": sums["loss"] / sample_count,
         "loss_3d": sums["loss_3d"] / sample_count,
         "loss_gd1": sums["loss_gd1"] / sample_count,
+        "loss_bone": sums["loss_bone"] / sample_count,
+        "loss_soft_mask": sums["loss_soft_mask"] / sample_count,
+        "bone_raw": sums["bone_raw"] / sample_count,
+        "soft_mask_raw": sums["soft_mask_raw"] / sample_count,
     }
 
 
@@ -207,6 +304,10 @@ def write_epoch_tensorboard(
 ) -> None:
     writer.add_scalar(f"epoch/{split}_l1_voxel", metrics["loss_3d"], epoch_number)
     writer.add_scalar(f"epoch/{split}_gradient1", metrics["loss_gd1"], epoch_number)
+    writer.add_scalar(f"epoch/{split}_bone_gt_mask", metrics["loss_bone"], epoch_number)
+    writer.add_scalar(f"epoch/{split}_bone_gt_mask_raw", metrics["bone_raw"], epoch_number)
+    writer.add_scalar(f"epoch/{split}_soft_mask", metrics["loss_soft_mask"], epoch_number)
+    writer.add_scalar(f"epoch/{split}_soft_mask_raw", metrics["soft_mask_raw"], epoch_number)
     writer.add_scalar(f"epoch/{split}_total", metrics["loss"], epoch_number)
 
 
@@ -231,6 +332,10 @@ def main() -> None:
         raise ValueError(f"batch-size must be positive, got {args.batch_size}.")
     if args.val_every < 1 or args.test_every < 1 or args.save_every < 1:
         raise ValueError("val-every, test-every and save-every must all be positive.")
+    if args.bone_lambda < 0 or args.soft_mask_lambda < 0:
+        raise ValueError("--bone-lambda and --soft-mask-lambda must be non-negative.")
+    if args.soft_window_high <= args.soft_window_low:
+        raise ValueError("--soft-window-high must be greater than --soft-window-low.")
 
     conf_path = resolve_from_repo(args.conf)
     data_root = resolve_from_repo(args.data_root)
@@ -250,6 +355,15 @@ def main() -> None:
         if args.gd1_lambda is not None
         else conf.get_float("train.G_loss.gd1_lambda")
     )
+    loss_config = {
+        "mse_lambda_3d": float(mse_lambda_3d),
+        "gd1_lambda": float(gd1_lambda),
+        "bone_lambda": float(args.bone_lambda),
+        "bone_lower_hu": float(args.bone_lower_hu),
+        "soft_mask_lambda": float(args.soft_mask_lambda),
+        "soft_window_low": float(args.soft_window_low),
+        "soft_window_high": float(args.soft_window_high),
+    }
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -310,7 +424,19 @@ def main() -> None:
                 parameter_group["lr"] = lr
         start_epoch = int(checkpoint.get("epoch", -1)) + 1
         step = int(checkpoint.get("step", 0))
-        best_val_loss = float(checkpoint.get("best_val_loss", float("inf")))
+        saved_loss_config = checkpoint.get("loss_config")
+        if saved_loss_config is not None and saved_loss_config == loss_config:
+            best_val_loss = float(checkpoint.get("best_val_loss", float("inf")))
+        elif saved_loss_config is not None or args.bone_lambda > 0 or args.soft_mask_lambda > 0:
+            # An old checkpoint's validation objective does not include the
+            # newly enabled regional losses, hence it is not comparable.
+            best_val_loss = float("inf")
+            print(
+                "Loss configuration changed; resetting best validation loss for the new objective.",
+                flush=True,
+            )
+        else:
+            best_val_loss = float(checkpoint.get("best_val_loss", float("inf")))
         previous_elapsed_seconds = float(checkpoint.get("elapsed_seconds", 0.0))
         print(
             f"Resumed {resume_path} after epoch {start_epoch}; "
@@ -333,8 +459,7 @@ def main() -> None:
         "clamp_min": clamp_min,
         "clamp_max": clamp_max,
         "lr": lr,
-        "mse_lambda_3d": mse_lambda_3d,
-        "gd1_lambda": gd1_lambda,
+        "loss_config": loss_config,
         "amp_enabled": amp_enabled,
         "resume_path": None if resume_path is None else str(resume_path),
         "start_epoch": start_epoch,
@@ -359,7 +484,11 @@ def main() -> None:
         for epoch in range(start_epoch, end_epoch):
             last_epoch = epoch
             epoch_number = epoch + 1
-            train_sums = {"loss": 0.0, "loss_3d": 0.0, "loss_gd1": 0.0}
+            train_sums = {
+                "loss": 0.0, "loss_3d": 0.0, "loss_gd1": 0.0,
+                "loss_bone": 0.0, "loss_soft_mask": 0.0,
+                "bone_raw": 0.0, "soft_mask_raw": 0.0,
+            }
             train_samples = 0
 
             for batch in train_loader:
@@ -367,8 +496,13 @@ def main() -> None:
                 subjects = list(batch["subject"])
                 optimizer.zero_grad(set_to_none=True)
                 with autocast_context():
-                    loss, loss_3d, loss_gd1, prediction, low_resolution, latent = calculate_losses(
-                        model, volume, l1_loss, mse_lambda_3d, gd1_lambda
+                    (
+                        loss, loss_3d, loss_gd1, loss_bone, loss_soft_mask,
+                        bone_raw, soft_raw, prediction, low_resolution, latent,
+                    ) = calculate_losses(
+                        model, volume, l1_loss, mse_lambda_3d, gd1_lambda,
+                        args.bone_lambda, args.bone_lower_hu, args.soft_mask_lambda,
+                        args.soft_window_low, args.soft_window_high, clamp_min, clamp_max,
                     )
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
@@ -380,6 +514,10 @@ def main() -> None:
                 train_sums["loss"] += float(loss.detach()) * current_batch_size
                 train_sums["loss_3d"] += float(loss_3d.detach()) * current_batch_size
                 train_sums["loss_gd1"] += float(loss_gd1.detach()) * current_batch_size
+                train_sums["loss_bone"] += float(loss_bone.detach()) * current_batch_size
+                train_sums["loss_soft_mask"] += float(loss_soft_mask.detach()) * current_batch_size
+                train_sums["bone_raw"] += float(bone_raw.detach()) * current_batch_size
+                train_sums["soft_mask_raw"] += float(soft_raw.detach()) * current_batch_size
                 elapsed = previous_elapsed_seconds + time.monotonic() - start_time
                 if device.type == "cuda":
                     peak_allocated_gib = torch.cuda.max_memory_allocated(device) / 1024**3
@@ -393,6 +531,10 @@ def main() -> None:
                     "subjects": subjects, "elapsed_seconds": elapsed,
                     "loss": float(loss.detach()), "loss_3d": float(loss_3d.detach()),
                     "loss_gd1": float(loss_gd1.detach()), "input_shape": list(volume.shape),
+                    "loss_bone_gt_mask": float(loss_bone.detach()),
+                    "bone_gt_mask_raw": float(bone_raw.detach()),
+                    "loss_soft_mask": float(loss_soft_mask.detach()),
+                    "soft_mask_raw": float(soft_raw.detach()),
                     "low_resolution_shape": list(low_resolution.shape),
                     "latent_shape": list(latent.shape), "prediction_shape": list(prediction.shape),
                     "peak_allocated_gib": peak_allocated_gib,
@@ -402,6 +544,10 @@ def main() -> None:
                 print(json.dumps(last_metrics, ensure_ascii=False), flush=True)
                 writer.add_scalar("train_step/l1_voxel", loss_3d, step)
                 writer.add_scalar("train_step/gradient1", loss_gd1, step)
+                writer.add_scalar("train_step/bone_gt_mask", loss_bone, step)
+                writer.add_scalar("train_step/bone_gt_mask_raw", bone_raw, step)
+                writer.add_scalar("train_step/soft_mask", loss_soft_mask, step)
+                writer.add_scalar("train_step/soft_mask_raw", soft_raw, step)
                 writer.add_scalar("train_step/total", loss, step)
                 writer.add_scalar("train_step/learning_rate", optimizer.param_groups[0]["lr"], step)
                 if device.type == "cuda":
@@ -418,6 +564,10 @@ def main() -> None:
                 "loss": train_sums["loss"] / train_samples,
                 "loss_3d": train_sums["loss_3d"] / train_samples,
                 "loss_gd1": train_sums["loss_gd1"] / train_samples,
+                "loss_bone": train_sums["loss_bone"] / train_samples,
+                "loss_soft_mask": train_sums["loss_soft_mask"] / train_samples,
+                "bone_raw": train_sums["bone_raw"] / train_samples,
+                "soft_mask_raw": train_sums["soft_mask_raw"] / train_samples,
             }
             epoch_record: dict[str, object] = {
                 "timestamp": datetime.now().isoformat(), "epoch": epoch,
@@ -430,6 +580,8 @@ def main() -> None:
                 val_metrics = evaluate(
                     "val", model, val_loader, device, autocast_context,
                     l1_loss, mse_lambda_3d, gd1_lambda,
+                    args.bone_lambda, args.bone_lower_hu, args.soft_mask_lambda,
+                    args.soft_window_low, args.soft_window_high, clamp_min, clamp_max,
                 )
                 epoch_record["val"] = val_metrics
                 write_epoch_tensorboard(writer, "val", val_metrics, epoch_number)
@@ -437,7 +589,8 @@ def main() -> None:
                     best_val_loss = float(val_metrics["loss"])
                     save_checkpoint(
                         checkpoint_dir / "ckpt_best_val.pt", model, optimizer, scaler,
-                        epoch, step, previous_elapsed_seconds + time.monotonic() - start_time, best_val_loss,
+                        epoch, step, previous_elapsed_seconds + time.monotonic() - start_time,
+                        best_val_loss, loss_config,
                     )
 
             should_test = (
@@ -448,6 +601,8 @@ def main() -> None:
                 test_metrics = evaluate(
                     "test", model, test_loader, device, autocast_context,
                     l1_loss, mse_lambda_3d, gd1_lambda,
+                    args.bone_lambda, args.bone_lower_hu, args.soft_mask_lambda,
+                    args.soft_window_low, args.soft_window_high, clamp_min, clamp_max,
                 )
                 epoch_record["test"] = test_metrics
                 write_epoch_tensorboard(writer, "test", test_metrics, epoch_number)
@@ -458,12 +613,12 @@ def main() -> None:
             elapsed = previous_elapsed_seconds + time.monotonic() - start_time
             save_checkpoint(
                 checkpoint_dir / "ckpt_latest.pt", model, optimizer, scaler,
-                epoch, step, elapsed, best_val_loss,
+                epoch, step, elapsed, best_val_loss, loss_config,
             )
             if epoch_number % args.save_every == 0:
                 save_checkpoint(
                     checkpoint_dir / f"ckpt_epoch_{epoch_number:04d}.pt",
-                    model, optimizer, scaler, epoch, step, elapsed, best_val_loss,
+                    model, optimizer, scaler, epoch, step, elapsed, best_val_loss, loss_config,
                 )
             if stop_requested:
                 break

@@ -38,6 +38,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help=(
+            "Checkpoint to continue from. When supplied, --epochs means the "
+            "number of additional epochs, not the total epoch count."
+        ),
+    )
     parser.add_argument("--gd1-lambda", type=float, default=None)
     parser.add_argument("--mse-lambda-3d", type=float, default=None)
     parser.add_argument(
@@ -278,6 +287,37 @@ def main() -> None:
     autocast_context = make_autocast_context(amp_enabled)
     writer = SummaryWriter(log_dir=str(tensorboard_dir))
 
+    start_epoch = 0
+    step = 0
+    best_val_loss = float("inf")
+    previous_elapsed_seconds = 0.0
+    resume_path = None
+    if args.resume is not None:
+        resume_path = resolve_from_repo(args.resume)
+        if not resume_path.is_file():
+            raise FileNotFoundError(f"Resume checkpoint does not exist: {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device)
+        if "model" not in checkpoint:
+            raise KeyError(f"Resume checkpoint has no 'model' state: {resume_path}")
+        model.load_state_dict(checkpoint["model"], strict=True)
+        if "optimizer" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer"])
+        if "scaler" in checkpoint:
+            scaler.load_state_dict(checkpoint["scaler"])
+        # A user-specified --lr deliberately overrides the stored Adam LR.
+        if args.lr is not None:
+            for parameter_group in optimizer.param_groups:
+                parameter_group["lr"] = lr
+        start_epoch = int(checkpoint.get("epoch", -1)) + 1
+        step = int(checkpoint.get("step", 0))
+        best_val_loss = float(checkpoint.get("best_val_loss", float("inf")))
+        previous_elapsed_seconds = float(checkpoint.get("elapsed_seconds", 0.0))
+        print(
+            f"Resumed {resume_path} after epoch {start_epoch}; "
+            f"running {args.epochs} additional epochs at lr={optimizer.param_groups[0]['lr']}",
+            flush=True,
+        )
+
     report = parameter_report(model)
     run_config = {
         **vars(args),
@@ -296,6 +336,9 @@ def main() -> None:
         "mse_lambda_3d": mse_lambda_3d,
         "gd1_lambda": gd1_lambda,
         "amp_enabled": amp_enabled,
+        "resume_path": None if resume_path is None else str(resume_path),
+        "start_epoch": start_epoch,
+        "additional_epochs": args.epochs,
         "created_at": datetime.now().isoformat(),
     }
     with (log_dir / "config.json").open("w", encoding="utf-8") as handle:
@@ -307,14 +350,13 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     start_time = time.monotonic()
-    step = 0
     stop_requested = False
-    last_epoch = 0
+    last_epoch = start_epoch - 1
     last_metrics: dict[str, object] = {}
-    best_val_loss = float("inf")
+    end_epoch = start_epoch + args.epochs
 
     try:
-        for epoch in range(args.epochs):
+        for epoch in range(start_epoch, end_epoch):
             last_epoch = epoch
             epoch_number = epoch + 1
             train_sums = {"loss": 0.0, "loss_3d": 0.0, "loss_gd1": 0.0}
@@ -338,7 +380,7 @@ def main() -> None:
                 train_sums["loss"] += float(loss.detach()) * current_batch_size
                 train_sums["loss_3d"] += float(loss_3d.detach()) * current_batch_size
                 train_sums["loss_gd1"] += float(loss_gd1.detach()) * current_batch_size
-                elapsed = time.monotonic() - start_time
+                elapsed = previous_elapsed_seconds + time.monotonic() - start_time
                 if device.type == "cuda":
                     peak_allocated_gib = torch.cuda.max_memory_allocated(device) / 1024**3
                     peak_reserved_gib = torch.cuda.max_memory_reserved(device) / 1024**3
@@ -395,12 +437,12 @@ def main() -> None:
                     best_val_loss = float(val_metrics["loss"])
                     save_checkpoint(
                         checkpoint_dir / "ckpt_best_val.pt", model, optimizer, scaler,
-                        epoch, step, time.monotonic() - start_time, best_val_loss,
+                        epoch, step, previous_elapsed_seconds + time.monotonic() - start_time, best_val_loss,
                     )
 
             should_test = (
                 not stop_requested
-                and (epoch_number % args.test_every == 0 or epoch_number == args.epochs)
+                and (epoch_number % args.test_every == 0 or epoch == end_epoch - 1)
             )
             if should_test:
                 test_metrics = evaluate(
@@ -413,7 +455,7 @@ def main() -> None:
             append_jsonl(epoch_metrics_path, epoch_record)
             print(json.dumps(epoch_record, ensure_ascii=False), flush=True)
             writer.flush()
-            elapsed = time.monotonic() - start_time
+            elapsed = previous_elapsed_seconds + time.monotonic() - start_time
             save_checkpoint(
                 checkpoint_dir / "ckpt_latest.pt", model, optimizer, scaler,
                 epoch, step, elapsed, best_val_loss,
@@ -429,7 +471,7 @@ def main() -> None:
         writer.flush()
         writer.close()
 
-    elapsed = time.monotonic() - start_time
+    elapsed = previous_elapsed_seconds + time.monotonic() - start_time
     summary = {
         "completed": True, "stopped_by_time_limit": stop_requested,
         "epoch": last_epoch, "steps": step, "elapsed_seconds": elapsed,

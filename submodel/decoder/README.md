@@ -92,6 +92,30 @@ A timed run stops after the first completed training step that reaches the time
 limit. It skips validation/test at that partial epoch so that a smoke test stops
 promptly.
 
+### Continue a finished run
+
+`--resume` restores the complete pretraining model, Adam state, AMP scaler,
+step counter, and best validation loss. When it is present, `--epochs` means
+the number of **additional** epochs. For example, continue from the best
+checkpoint for 50 epochs with a lower learning rate:
+
+```bash
+python -m submodel.decoder.train \
+  --run-name dental_batch3 \
+  --device cuda \
+  --batch-size 3 \
+  --resume submodel/decoder/checkpoints/dental_batch3/ckpt_best_val.pt \
+  --epochs 50 \
+  --lr 2e-5 \
+  --val-every 1 \
+  --test-every 10 \
+  --save-every 5
+```
+
+Use `ckpt_latest.pt` instead of `ckpt_best_val.pt` only when the intent is to
+continue exactly from the final epoch, rather than from the best validation
+model.
+
 ## Command-line parameters
 
 | Parameter | Default | Meaning |
@@ -106,6 +130,7 @@ promptly.
 | `--batch-size` | `1` | Number of full 3D volumes processed together. Batch 3 is intended for the 32 GB GPU; AMP is enabled by default. |
 | `--num-workers` | `0` | Number of DataLoader worker processes. On Windows, start with 0; increase only after verifying host RAM and I/O behavior. |
 | `--lr` | config value (`1e-4`) | Adam learning rate. If omitted, uses `lr_sche.init_lr` from the config. |
+| `--resume` | none | Checkpoint to restore. With this option, `--epochs` is the number of additional epochs. A supplied `--lr` replaces the learning rate stored in the checkpoint. |
 | `--mse-lambda-3d` | config value (`1.0`) | Weight of the voxel-wise L1 loss. The name is retained for compatibility with the original project. |
 | `--gd1-lambda` | config value (`1.0`) | Weight of the first-order spatial-gradient L1 loss. |
 | `--max-seconds` | `0` | Wall-clock training limit in seconds; `0` disables it. Intended for smoke tests, not normal training. |
@@ -186,3 +211,26 @@ prior_stem.load_state_dict(checkpoint["feature_stem"], strict=True)
 See the root `README.md` section **Transfer the pCT-pretrained decoder into the
 full model** for latent alignment, three-stage training, soft-tissue-window loss,
 TensorBoard tags, resume commands, and inference.
+
+## Fixed-HU PSNR and regional error analysis
+
+Evaluate every case in both validation and test splits with the independently
+pretrained decoder:
+
+```bash
+python -m submodel.decoder.evaluate_metrics \
+  --checkpoint submodel/decoder/checkpoints/dental_batch3/ckpt_best_val.pt \
+  --device cuda \
+  --batch-size 3
+```
+
+Metrics use the shared dental physical range `[-1000, 3095] HU`, not separate
+prediction/GT min-max normalization. The default GT-defined regions are air
+`HU < -500`, tissue `[-500, 300)`, and bone `HU >= 300`. Every case is written
+to `submodel/decoder/metrics/<checkpoint-stem>/<split>_per_case.jsonl`; each
+split's `*_summary.json` contains the case-wise mean, population variance, and
+standard deviation of PSNR, HU errors, voxel fractions, regional MSE share, and
+the theoretical PSNR gain if one region's error were removed. `mse_share` is
+the region's actual contribution to global MSE and therefore the relevant
+quantity for diagnosing the PSNR bottleneck. Region-level oracle gains cannot
+be added together because PSNR is logarithmic.

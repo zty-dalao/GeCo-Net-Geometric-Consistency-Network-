@@ -19,7 +19,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from submodel.decoder.dataset import DentalVolumeDataset  # noqa: E402
-from submodel.decoder.loss import gradient1_loss_3d  # noqa: E402
+from submodel.decoder.loss import (  # noqa: E402
+    bone_gt_mask_l1,
+    gradient1_loss_3d,
+    soft_tissue_gt_mask_l1,
+)
 from submodel.decoder.model import DecoderPretrainer  # noqa: E402
 
 
@@ -169,16 +173,6 @@ def make_loader(
     )
 
 
-def mu_to_hu(volume: torch.Tensor) -> torch.Tensor:
-    return (volume / 0.022 - 1.0) * 1000.0
-
-
-def masked_l1(error: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    """Mean absolute error over a GT-defined mask, including valid gradients outside it."""
-    mask = mask.to(dtype=error.dtype)
-    return (error * mask).sum() / mask.sum().clamp_min(1.0)
-
-
 def calculate_losses(
     model: DecoderPretrainer,
     volume: torch.Tensor,
@@ -199,20 +193,14 @@ def calculate_losses(
     prediction, low_resolution, latent = model(volume)
     loss_3d = l1_loss(prediction, volume) * mse_lambda_3d
     loss_gd1 = gradient1_loss_3d(volume, prediction, l1_loss) * gd1_lambda
-    prediction_fp32 = prediction.float()
-    volume_fp32 = volume.float()
-    hu_prediction = mu_to_hu(prediction_fp32)
-    hu_target = mu_to_hu(volume_fp32)
     zero = loss_3d.new_zeros(())
 
     # Masks come only from GT. Crucially, prediction is not clamped before the
     # error is measured, so a prediction outside either region still receives
     # a gradient that pulls it back toward the GT HU value.
     if bone_lambda > 0:
-        bone_mask = hu_target >= bone_lower_hu
-        bone_raw = masked_l1(
-            torch.abs(prediction_fp32 - volume_fp32) / (clamp_max - clamp_min),
-            bone_mask,
+        bone_raw = bone_gt_mask_l1(
+            prediction, volume, bone_lower_hu, clamp_min, clamp_max,
         )
         loss_bone = bone_raw * bone_lambda
     else:
@@ -220,10 +208,8 @@ def calculate_losses(
         loss_bone = zero
 
     if soft_mask_lambda > 0:
-        soft_mask = (hu_target >= soft_window_low) & (hu_target < soft_window_high)
-        soft_raw = masked_l1(
-            torch.abs(hu_prediction - hu_target) / (soft_window_high - soft_window_low),
-            soft_mask,
+        soft_raw = soft_tissue_gt_mask_l1(
+            prediction, volume, soft_window_low, soft_window_high,
         )
         loss_soft_mask = soft_raw * soft_mask_lambda
     else:

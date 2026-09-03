@@ -9,6 +9,7 @@ from models.render import *
 from util.util_func import *
 import datetime
 from models.loss import *
+from submodel.decoder.loss import bone_gt_mask_l1, soft_tissue_gt_mask_l1, ssim_loss_3d
 from submodel.decoder.model import PriorFeatureStem
 
 class trainer():
@@ -37,7 +38,10 @@ class trainer():
         self.gd1_lambda = conf.get_float('train.G_loss.gd1_lambda')
         self.latent_lambda = args.latent_lambda
         self.latent_cosine_lambda = args.latent_cosine_lambda
-        self.soft_lambda = args.soft_lambda
+        self.bone_lambda = args.bone_lambda
+        self.soft_mask_lambda = args.soft_mask_lambda
+        self.ssim_lambda = args.ssim_lambda
+        self.bone_lower_hu = args.bone_lower_hu
         self.soft_window_low = args.soft_window_low
         self.soft_window_high = args.soft_window_high
         if self.soft_window_high <= self.soft_window_low:
@@ -59,8 +63,8 @@ class trainer():
         self.stage3_backbone_lr_factor = args.stage3_backbone_lr_factor
         if self.stage1_epochs < 0 or self.stage2_epochs < 0:
             raise ValueError("stage1_epochs and stage2_epochs must be non-negative")
-        if self.latent_lambda < 0 or self.soft_lambda < 0:
-            raise ValueError("latent_lambda and soft_lambda must be non-negative")
+        if min(self.latent_lambda, self.bone_lambda, self.soft_mask_lambda, self.ssim_lambda) < 0:
+            raise ValueError("latent_lambda, bone_lambda, soft_mask_lambda, and ssim_lambda must be non-negative")
         if self.latent_lambda > 0 and not args.pretrained_decoder:
             raise ValueError("--latent_lambda > 0 requires --pretrained_decoder")
         if self.use_staged_training and self.stage1_epochs + self.stage2_epochs >= self.num_epochs:
@@ -294,14 +298,43 @@ class trainer():
     def _mu_to_hu(volume):
         return (volume / 0.022 - 1.0) * 1000.0
 
-    def _soft_window(self, volume):
-        hu = self._mu_to_hu(volume)
-        return torch.clamp(
-            (hu - self.soft_window_low)
-            / (self.soft_window_high - self.soft_window_low),
-            0.0,
-            1.0,
-        )
+    def _regional_and_ssim_losses(self, volume_predict, volume_gt):
+        """Optional full-model losses shared with Decoder pretraining.
+
+        Masks are defined only by ground truth and prediction is never clamped
+        before the regional errors are calculated.  Therefore a voxel predicted
+        outside the desired HU interval still receives a corrective gradient.
+        """
+        zero = volume_predict.new_zeros(())
+        results = {
+            "bone_gt_mask_raw": zero,
+            "bone_gt_mask_loss": zero,
+            "soft_mask_raw": zero,
+            "soft_mask_loss": zero,
+            "ssim_loss_raw": zero,
+            "ssim_loss": zero,
+        }
+        if self.bone_lambda > 0:
+            raw = bone_gt_mask_l1(
+                volume_predict, volume_gt, self.bone_lower_hu,
+                self.clamp_min, self.clamp_max,
+            )
+            results["bone_gt_mask_raw"] = raw
+            results["bone_gt_mask_loss"] = raw * self.bone_lambda
+        if self.soft_mask_lambda > 0:
+            raw = soft_tissue_gt_mask_l1(
+                volume_predict, volume_gt,
+                self.soft_window_low, self.soft_window_high,
+            )
+            results["soft_mask_raw"] = raw
+            results["soft_mask_loss"] = raw * self.soft_mask_lambda
+        if self.ssim_lambda > 0:
+            raw = ssim_loss_3d(
+                volume_predict, volume_gt, self.clamp_min, self.clamp_max,
+            )
+            results["ssim_loss_raw"] = raw
+            results["ssim_loss"] = raw * self.ssim_lambda
+        return results
 
     def _make_prior_latent(self, volume_gt):
         if self.prior_stem is None:
@@ -447,15 +480,14 @@ class trainer():
             loss_dict['latent_smooth_l1_raw'] = 0.0
             loss_dict['latent_cosine_raw'] = 0.0
 
-        if self.soft_lambda > 0:
-            soft_loss = self.mse_loss(
-                self._soft_window(volume_predict),
-                self._soft_window(volume_gt),
-            ) * self.soft_lambda
-            G_loss += soft_loss
-            loss_dict['soft_tissue_loss'] = round(soft_loss.item(), 8)
-        else:
-            loss_dict['soft_tissue_loss'] = 0.0
+        optional_losses = self._regional_and_ssim_losses(volume_predict, volume_gt)
+        for key, value in optional_losses.items():
+            loss_dict[key] = round(value.item(), 8)
+        G_loss += (
+            optional_losses['bone_gt_mask_loss']
+            + optional_losses['soft_mask_loss']
+            + optional_losses['ssim_loss']
+        )
 
         # 2d ray batch loss
         if self.mse_lambda_2d > 0:
@@ -490,7 +522,9 @@ class trainer():
         self.writer.add_scalar("step/train_total", G_loss.detach(), self.global_step)
         for key in (
             'mse_loss_3d', 'gd1_loss', 'mse_loss_2d', 'latent_loss',
-            'latent_smooth_l1_raw', 'latent_cosine_raw', 'soft_tissue_loss'
+            'latent_smooth_l1_raw', 'latent_cosine_raw',
+            'bone_gt_mask_raw', 'bone_gt_mask_loss',
+            'soft_mask_raw', 'soft_mask_loss', 'ssim_loss_raw', 'ssim_loss',
         ):
             self.writer.add_scalar(f"step/train_{key}", loss_dict[key], self.global_step)
         self.writer.add_scalar("step/latent_weight", latent_weight, self.global_step)
@@ -600,15 +634,14 @@ class trainer():
             loss_dict['latent_smooth_l1_raw'] = 0.0
             loss_dict['latent_cosine_raw'] = 0.0
 
-        if self.soft_lambda > 0:
-            soft_loss = self.mse_loss(
-                self._soft_window(volume_predict),
-                self._soft_window(volume_gt),
-            ) * self.soft_lambda
-            total_loss += soft_loss
-            loss_dict['soft_tissue_loss'] = round(soft_loss.item(), 8)
-        else:
-            loss_dict['soft_tissue_loss'] = 0.0
+        optional_losses = self._regional_and_ssim_losses(volume_predict, volume_gt)
+        for key, value in optional_losses.items():
+            loss_dict[key] = round(value.item(), 8)
+        total_loss += (
+            optional_losses['bone_gt_mask_loss']
+            + optional_losses['soft_mask_loss']
+            + optional_losses['ssim_loss']
+        )
 
         if self.mse_lambda_2d > 0:
             total_pixels = src_images.shape[0] * H * W
@@ -697,7 +730,12 @@ class trainer():
             'latent_loss',
             'latent_smooth_l1_raw',
             'latent_cosine_raw',
-            'soft_tissue_loss',
+            'bone_gt_mask_raw',
+            'bone_gt_mask_loss',
+            'soft_mask_raw',
+            'soft_mask_loss',
+            'ssim_loss_raw',
+            'ssim_loss',
         )
 
     def _write_epoch_tensorboard(self, split, sums, count, epoch, metrics=None):

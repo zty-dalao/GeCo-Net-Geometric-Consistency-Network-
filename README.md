@@ -97,9 +97,12 @@ python train.py \
   --decoder_lr_factor 0.1 \
   --stage3_backbone_lr_factor 0.01 \
   --query_chunk_size 25000 \
-  --soft_lambda 0.5 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
   --soft_window_low -160 \
-  --soft_window_high 240
+  --soft_window_high 240 \
+  --ssim_lambda 0.01
 ```
 
 The original full model currently supports object batch size 1; `--batch_size 3`
@@ -117,16 +120,19 @@ New arguments:
 | `--stage2_epochs` | `65` | Following epochs for full joint fine-tuning. Remaining `--epochs` are stage 3. |
 | `--decoder_lr_factor` | `0.1` | Decoder LR relative to the base encoder/aggregator LR. |
 | `--stage3_backbone_lr_factor` | `0.01` | Encoder/aggregator LR factor in stage 3. Set it to `0` to freeze them completely. |
-| `--soft_lambda` | `0.0` | Additional soft-tissue-window L1 weight. The original attenuation L1 remains active. |
+| `--bone_lambda` | `0.0` | GT 骨区掩码 L1 权重；设为 `0` 关闭。骨区定义为 GT HU ≥ `--bone_lower_hu`。 |
+| `--bone_lower_hu` | `300` | 骨区 GT 掩码的 HU 下限。 |
+| `--soft_mask_lambda` | `0.0` | GT 软组织窗口掩码 L1 权重；设为 `0` 关闭。GT 位于给定窗口内才计入，但预测不会预先截断。 |
 | `--soft_window_low` | `-160` | Lower HU boundary of the soft-tissue window. |
 | `--soft_window_high` | `240` | Upper HU boundary of the soft-tissue window. |
+| `--ssim_lambda` | `0.0` | 可微局部 3D `1-SSIM` 损失权重；设为 `0` 关闭。采用固定衰减系数范围归一化和 (3\times3\times3) 局部窗口。 |
 | `--query_chunk_size` | `25000` | Number of 3D points processed by backprojection and multi-view fusion at once. Reduce to `12500` if a 32 GB GPU still runs out of memory. |
 | `--disable_query_checkpoint` | off | Disable activation recomputation for backprojection/view fusion. This is faster but requires substantially more memory. |
 | `--no_amp` | off | Disable CUDA mixed precision. Do not use this on a 32 GB GPU unless debugging numerical behavior. |
 
-The soft-tissue loss is an additional normalized HU-window loss; it does not replace
-the original attenuation-space L1, gradient loss, or projection loss. This keeps bone
-and global attenuation constrained while increasing sensitivity to low-contrast tissue.
+这三项专项损失都默认关闭，以保证旧 checkpoint 可直接加载。启用时，骨区与软组织掩码都只由
+GT 生成，预测值不截断；因此即使预测跑到窗外，仍保留将其拉回 GT 的梯度。`--ssim_lambda`
+使用可反传的 PyTorch 局部 SSIM，不是评估阶段的 `skimage` SSIM。
 
 ### TensorBoard for full-model training
 
@@ -154,7 +160,12 @@ mse_loss_2d               projection-domain L1
 latent_loss               weighted latent alignment
 latent_smooth_l1_raw      unweighted normalized latent Smooth L1
 latent_cosine_raw         unweighted latent cosine distance
-soft_tissue_loss          weighted normalized HU-window L1
+bone_gt_mask_raw          unweighted GT bone-mask normalized L1
+bone_gt_mask_loss         weighted GT bone-mask contribution
+soft_mask_raw             unweighted GT soft-tissue-mask normalized L1
+soft_mask_loss            weighted GT soft-tissue-mask contribution
+ssim_loss_raw             unweighted differentiable local 1-SSIM
+ssim_loss                 weighted 1-SSIM contribution
 psnr_3d_clamp
 ssim_3d_clamp             validation/test only
 ```
@@ -203,7 +214,9 @@ python train.py \
   --latent_lambda 0.1 \
   --stage1_epochs 15 \
   --stage2_epochs 65 \
-  --soft_lambda 0.5
+  --bone_lambda 0.05 \
+  --soft_mask_lambda 0.01 \
+  --ssim_lambda 0.01
 ```
 
 `--resume` restores the full model, optimizer, scheduler, epoch, and global TensorBoard
@@ -237,6 +250,20 @@ python evaluate.py \
 ```
 
 This loads `train/checkpoints/dental_prior_transfer/ckpt_history/ckpt_99`.
+
+To report the same optional loss components used in training, append their
+weights to `evaluate.py`.  A zero weight disables that component; evaluation
+still always reports PSNR and the reporting SSIM:
+
+```bash
+  --bone_lambda 0.05 --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 --soft_window_low -160 --soft_window_high 240 \
+  --ssim_lambda 0.01
+```
+
+`metric_batch.txt` contains each case; `logs_avg.txt` contains mean and standard
+deviation for `bone_gt_mask_*`, `soft_mask_*`, and `ssim_loss_*` in addition to
+PSNR/SSIM.
 
 ## Related Links
 - Vector-based CBCT scanning geometry description (source, detector, uvector, vvector) is inspired by [WalnutScan](https://github.com/cicwi/WalnutReconstructionCodes) and [Astra-toolbox](https://github.com/astra-toolbox/astra-toolbox).

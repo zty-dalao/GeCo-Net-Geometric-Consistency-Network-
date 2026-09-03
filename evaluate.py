@@ -6,6 +6,7 @@ from models.model import model
 import torch.utils.data
 from models.render import *
 from util.util_func import *
+from submodel.decoder.loss import bone_gt_mask_l1, soft_tissue_gt_mask_l1, ssim_loss_3d
 
 def test_step():
     # data loading
@@ -51,6 +52,30 @@ def test_step():
     # calculate metrics with clamped volume for more accurate evaluation
     loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
     loss_dict['ssim_3d_clamp'] = round(get_ssim_3d(data_norm(volume_predict_clamp), data_norm(volume_gt), data_range=1), 8)
+    # These use the exact same GT-defined mask implementations as standalone
+    # Decoder pretraining.  They are optional reports, not metrics used for
+    # checkpoint loading or image generation.
+    zero = volume_predict.new_zeros(())
+    bone_raw = zero
+    soft_raw = zero
+    ssim_raw = zero
+    if args.bone_lambda > 0:
+        bone_raw = bone_gt_mask_l1(
+            volume_predict, volume_gt, args.bone_lower_hu, clamp_min, clamp_max,
+        )
+    if args.soft_mask_lambda > 0:
+        soft_raw = soft_tissue_gt_mask_l1(
+            volume_predict, volume_gt,
+            args.soft_window_low, args.soft_window_high,
+        )
+    if args.ssim_lambda > 0:
+        ssim_raw = ssim_loss_3d(volume_predict, volume_gt, clamp_min, clamp_max)
+    loss_dict['bone_gt_mask_raw'] = round(bone_raw.item(), 8)
+    loss_dict['bone_gt_mask_loss'] = round((bone_raw * args.bone_lambda).item(), 8)
+    loss_dict['soft_mask_raw'] = round(soft_raw.item(), 8)
+    loss_dict['soft_mask_loss'] = round((soft_raw * args.soft_mask_lambda).item(), 8)
+    loss_dict['ssim_loss_raw'] = round(ssim_raw.item(), 8)
+    loss_dict['ssim_loss'] = round((ssim_raw * args.ssim_lambda).item(), 8)
     return loss_dict
 
 def fmt_loss_str(losses):
@@ -109,6 +134,11 @@ if __name__ == '__main__':
 
     psnr_3d_clamp_list = []
     ssim_3d_clamp_list = []
+    optional_loss_lists = {
+        'bone_gt_mask_raw': [], 'bone_gt_mask_loss': [],
+        'soft_mask_raw': [], 'soft_mask_loss': [],
+        'ssim_loss_raw': [], 'ssim_loss': [],
+    }
     with torch.no_grad():
         for data in evaluate_data_loader:
             obj_index = data["obj_index"][0]
@@ -120,6 +150,8 @@ if __name__ == '__main__':
             # batch logs
             psnr_3d_clamp_list.append(test_losses['psnr_3d_clamp'])
             ssim_3d_clamp_list.append(test_losses['ssim_3d_clamp'])          
+            for key in optional_loss_lists:
+                optional_loss_lists[key].append(test_losses[key])
             f_test_psnr_batch = open(logs_path + '/metric_batch.txt', mode='a')
             f_test_psnr_batch.write(now.strftime('%Y-%m-%d %H:%M:%S') + test_loss_str + '\n')
             f_test_psnr_batch.close()
@@ -129,6 +161,9 @@ if __name__ == '__main__':
         avg_dict['psnr_3d_clamp_std'] = np.std(psnr_3d_clamp_list)
         avg_dict['ssim_3d_clamp_mean'] = np.mean(ssim_3d_clamp_list)
         avg_dict['ssim_3d_clamp_std'] = np.std(ssim_3d_clamp_list)
+        for key, values in optional_loss_lists.items():
+            avg_dict[key + '_mean'] = np.mean(values)
+            avg_dict[key + '_std'] = np.std(values)
         avg_dict_str = fmt_loss_str(avg_dict)
 
         now = datetime.datetime.now()

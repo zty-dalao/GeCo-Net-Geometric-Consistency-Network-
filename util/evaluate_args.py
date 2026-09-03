@@ -25,6 +25,21 @@ def parse_args():
     parser.add_argument("--dataname", type=str, default='test', help="evaluate dataname") 
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
     parser.add_argument(
+        "--bone_lambda", type=float, default=0.0,
+        help="Report weighted GT-defined bone-mask L1 (0 disables this loss report)",
+    )
+    parser.add_argument("--bone_lower_hu", type=float, default=300.0, help="GT HU lower bound for bone mask")
+    parser.add_argument(
+        "--soft_mask_lambda", type=float, default=0.0,
+        help="Report weighted GT-defined soft-tissue-mask L1 (0 disables this loss report)",
+    )
+    parser.add_argument("--soft_window_low", type=float, default=-160.0, help="Soft-tissue HU window lower bound")
+    parser.add_argument("--soft_window_high", type=float, default=240.0, help="Soft-tissue HU window upper bound")
+    parser.add_argument(
+        "--ssim_lambda", type=float, default=0.0,
+        help="Report weighted differentiable local 3-D (1-SSIM) loss (0 disables this loss report)",
+    )
+    parser.add_argument(
         "--query_chunk_size",
         type=int,
         default=25000,
@@ -37,6 +52,11 @@ def parse_args():
     )
 
     args = parser.parse_args()
+
+    if min(args.bone_lambda, args.soft_mask_lambda, args.ssim_lambda) < 0:
+        parser.error("bone_lambda, soft_mask_lambda, and ssim_lambda must be non-negative")
+    if args.soft_window_high <= args.soft_window_low:
+        parser.error("soft_window_high must be greater than soft_window_low")
 
     conf = ConfigFactory.parse_file(args.conf)
     if args.train_scale!=0:
@@ -61,6 +81,14 @@ def parse_args():
                      'scale: ' , str(conf['model.SRGAN.generator.scale']) , '\n',
                      'inplanes: ' , str(conf['model.SRGAN.generator.inplanes']) , '\n' ,
                      'fusion strategy: ' , conf['model.fusion'] , '\n',]
+
+    exp_state_list.extend([
+        'bone_lambda: ', str(args.bone_lambda), '\n',
+        'bone_lower_hu: ', str(args.bone_lower_hu), '\n',
+        'soft_mask_lambda: ', str(args.soft_mask_lambda), '\n',
+        'soft_window: [', str(args.soft_window_low), ', ', str(args.soft_window_high), '] HU\n',
+        'ssim_lambda: ', str(args.ssim_lambda), '\n',
+    ])
 
     exp_state = ''.join(exp_state_list)
     print(exp_state)

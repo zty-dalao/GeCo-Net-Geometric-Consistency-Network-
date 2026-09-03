@@ -70,13 +70,31 @@ def parse_args():
         help="Encoder/aggregator learning-rate multiplier in stage 3; set 0 to freeze them",
     )
     parser.add_argument(
-        "--soft_lambda",
+        "--bone_lambda",
         type=float,
         default=0.0,
-        help="Weight of the additional normalized soft-tissue-window L1 loss",
+        help="Weight of the GT-defined bone-region normalized L1 loss; 0 disables it",
+    )
+    parser.add_argument(
+        "--bone_lower_hu",
+        type=float,
+        default=300.0,
+        help="GT HU lower bound for the bone mask",
+    )
+    parser.add_argument(
+        "--soft_mask_lambda",
+        type=float,
+        default=0.0,
+        help="Weight of the GT-defined soft-tissue-mask normalized L1 loss; 0 disables it",
     )
     parser.add_argument("--soft_window_low", type=float, default=-160.0, help="Soft-tissue HU window lower bound")
     parser.add_argument("--soft_window_high", type=float, default=240.0, help="Soft-tissue HU window upper bound")
+    parser.add_argument(
+        "--ssim_lambda",
+        type=float,
+        default=0.0,
+        help="Weight of differentiable fixed-range local 3-D (1-SSIM) loss; 0 disables it",
+    )
     parser.add_argument(
         "--query_chunk_size",
         type=int,
@@ -134,8 +152,11 @@ def parse_args():
         'stage2_epochs: ', str(args.stage2_epochs), '\n',
         'decoder_lr_factor: ', str(args.decoder_lr_factor), '\n',
         'stage3_backbone_lr_factor: ', str(args.stage3_backbone_lr_factor), '\n',
-        'soft_lambda: ', str(args.soft_lambda), '\n',
+        'bone_lambda: ', str(args.bone_lambda), '\n',
+        'bone_lower_hu: ', str(args.bone_lower_hu), '\n',
+        'soft_mask_lambda: ', str(args.soft_mask_lambda), '\n',
         'soft_window: [', str(args.soft_window_low), ', ', str(args.soft_window_high), '] HU\n',
+        'ssim_lambda: ', str(args.ssim_lambda), '\n',
         'query_chunk_size: ', str(args.query_chunk_size), '\n',
         'query_checkpoint: ', "no" if args.disable_query_checkpoint else "yes", '\n',
         'amp: ', "no" if args.no_amp else "yes", '\n',

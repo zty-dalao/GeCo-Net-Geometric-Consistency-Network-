@@ -6,6 +6,7 @@ train/
 evaluate/
 submodel/decoder/checkpoints/
 submodel/decoder/logs/
+submodel/decoder/metrics/
 
 # Python
 __pycache__/

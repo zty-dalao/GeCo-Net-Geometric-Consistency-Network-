@@ -71,6 +71,21 @@ def _safe_psnr(mse: float) -> float:
     return math.inf if mse == 0.0 else -10.0 * math.log10(mse)
 
 
+def root_compatible_ssim(prediction_mu: torch.Tensor, target_mu: torch.Tensor) -> float:
+    """Reuse the exact separate-min-max 3D SSIM protocol of root evaluate.py."""
+    from util.util_func import data_norm, get_ssim_3d
+
+    # Per-case tensors have one channel [1, X, Y, Z], whereas get_ssim_3d()
+    # expects a plain [X, Y, Z] volume, as used by root evaluate.py.
+    prediction_xyz = prediction_mu.squeeze(0)
+    target_xyz = target_mu.squeeze(0)
+    return float(get_ssim_3d(
+        data_norm(prediction_xyz),
+        data_norm(target_xyz),
+        data_range=1,
+    ))
+
+
 def metrics_for_case(
     prediction_mu: torch.Tensor,
     target_mu: torch.Tensor,
@@ -93,6 +108,7 @@ def metrics_for_case(
     squared_error_hu = (hu_prediction - hu_target).square()
     global_mse = float(squared_error.mean().item())
     global_mae_hu = float(absolute_error_hu.mean().item())
+    ssim_root_protocol = root_compatible_ssim(prediction_mu, target_mu)
     total_voxels = target_mu.numel()
     result = {
         "global_voxel_count": float(total_voxels),
@@ -104,6 +120,10 @@ def metrics_for_case(
         # Explicit alias: the decoder output is the synthesized CT-like volume
         # and target_mu is the complete pCT/CT volume used for pretraining.
         "sct_vs_pct_psnr_db": _safe_psnr(global_mse),
+        # Same algorithm and separate normalization as root evaluate.py's
+        # `ssim_3d_clamp`, retained under both a generic and explicit name.
+        "ssim_3d_clamp": ssim_root_protocol,
+        "sct_vs_pct_ssim_3d": ssim_root_protocol,
     }
     masks = {
         "air": hu_target < air_upper_hu,
@@ -175,6 +195,7 @@ def print_split_summary(split: str, summary: dict[str, object]) -> None:
     print(
         f"{split}: cases={summary['cases']}, "
         f"sCT-vs-pCT PSNR={mean['sct_vs_pct_psnr_db']:.4f}±{summary['std']['sct_vs_pct_psnr_db']:.4f} dB, "
+        f"SSIM={mean['sct_vs_pct_ssim_3d']:.4f}±{summary['std']['sct_vs_pct_ssim_3d']:.4f}, "
         f"MAE={mean['global_mae_hu']:.2f} HU"
     )
     for region in ("air", "tissue", "bone"):

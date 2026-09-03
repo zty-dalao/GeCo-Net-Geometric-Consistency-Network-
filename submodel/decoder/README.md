@@ -278,10 +278,17 @@ PSNR=-10\log_{10}(MSE_{[0,1]})
 ```text
 sct_vs_pct_psnr_db  # 生成 sCT 与完整 pCT/CT GT 的固定范围 PSNR
 global_psnr_db      # 与上一字段相同，保留为通用名称
+sct_vs_pct_ssim_3d # 生成 sCT 与完整 pCT/CT GT 的三维 SSIM
+ssim_3d_clamp       # 与上一字段相同，名称与根目录 evaluate.py 对齐
 global_mae_hu
 global_rmse_hu
 global_mse_normalized
 ```
+
+SSIM 直接复用根目录 `evaluate.py` 的 `data_norm()` 与 `get_ssim_3d()`：预测与 GT 分别做
+min-max 归一化后，计算三个正交方向的 SSIM 并取平均。因此
+`sct_vs_pct_ssim_3d` 与主项目的 `ssim_3d_clamp` 使用相同协议；它与固定 HU 范围 PSNR
+的归一化协议不同，二者不应相互换算。
 
 ### 空气、组织、骨骼对 PSNR 的贡献
 
@@ -334,6 +341,8 @@ submodel/decoder/metrics/dental_batch3_region_refine/
 - 整个 val/test 的平均 PSNR：查看 `*_summary.json` 中
   `mean.sct_vs_pct_psnr_db`；
 - PSNR 方差：查看 `variance.sct_vs_pct_psnr_db`；
+- 整个 val/test 的平均 SSIM：查看 `mean.sct_vs_pct_ssim_3d`；
+- SSIM 方差：查看 `variance.sct_vs_pct_ssim_3d`；
 - 整个 split 的平均空气/组织/骨骼贡献率：查看
   `mean.air_mse_share`、`mean.tissue_mse_share`、`mean.bone_mse_share`；
 - 对应病例间方差：查看同名字段的 `variance`。

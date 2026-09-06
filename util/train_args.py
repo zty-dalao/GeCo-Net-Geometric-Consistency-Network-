@@ -34,6 +34,35 @@ def parse_args():
         help="Decoder-pretraining checkpoint containing decoder and feature_stem keys",
     )
     parser.add_argument(
+        "--pretrained_backbone",
+        type=str,
+        default=None,
+        help="Optional main-model checkpoint; load only encoder/aggregator weights",
+    )
+    parser.add_argument(
+        "--use_adapter",
+        action="store_true",
+        help="Insert a residual latent adapter between the aggregator and decoder",
+    )
+    parser.add_argument(
+        "--adapter_hidden_channels",
+        type=int,
+        default=64,
+        help="Bottleneck channels in the latent adapter",
+    )
+    parser.add_argument(
+        "--adapter_lr_factor",
+        type=float,
+        default=1.0,
+        help="Adapter learning-rate multiplier relative to the base learning rate",
+    )
+    parser.add_argument(
+        "--stage1_backbone_lr_factor",
+        type=float,
+        default=1.0,
+        help="Encoder/aggregator LR multiplier in stage 1; set 0 for adapter-only stage 1",
+    )
+    parser.add_argument(
         "--latent_lambda",
         type=float,
         default=0.0,
@@ -146,6 +175,11 @@ def parse_args():
 
     exp_state_list.extend([
         'pretrained_decoder: ', str(args.pretrained_decoder), '\n',
+        'pretrained_backbone: ', str(args.pretrained_backbone), '\n',
+        'use_adapter: ', "yes" if args.use_adapter else "no", '\n',
+        'adapter_hidden_channels: ', str(args.adapter_hidden_channels), '\n',
+        'adapter_lr_factor: ', str(args.adapter_lr_factor), '\n',
+        'stage1_backbone_lr_factor: ', str(args.stage1_backbone_lr_factor), '\n',
         'latent_lambda: ', str(args.latent_lambda), '\n',
         'latent_cosine_lambda: ', str(args.latent_cosine_lambda), '\n',
         'stage1_epochs: ', str(args.stage1_epochs), '\n',

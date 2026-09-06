@@ -61,8 +61,12 @@ class trainer():
         self.stage2_epochs = args.stage2_epochs
         self.decoder_lr_factor = args.decoder_lr_factor
         self.stage3_backbone_lr_factor = args.stage3_backbone_lr_factor
+        self.stage1_backbone_lr_factor = args.stage1_backbone_lr_factor
+        self.adapter_lr_factor = args.adapter_lr_factor
         if self.stage1_epochs < 0 or self.stage2_epochs < 0:
             raise ValueError("stage1_epochs and stage2_epochs must be non-negative")
+        if self.stage1_backbone_lr_factor < 0 or self.adapter_lr_factor < 0:
+            raise ValueError("stage1_backbone_lr_factor and adapter_lr_factor must be non-negative")
         if min(self.latent_lambda, self.bone_lambda, self.soft_mask_lambda, self.ssim_lambda) < 0:
             raise ValueError("latent_lambda, bone_lambda, soft_mask_lambda, and ssim_lambda must be non-negative")
         if self.latent_lambda > 0 and not args.pretrained_decoder:
@@ -169,20 +173,31 @@ class trainer():
         aggregator = getattr(self.G_render, "aggregator", None)
         aggregator_parameters = [] if aggregator is None else list(aggregator.parameters())
         backbone_parameters = list(self.G_render.encoder.parameters()) + aggregator_parameters
-        self.G_optim = torch.optim.Adam(
-            [
-                {"params": backbone_parameters, "lr": init_lr, "name": "backbone"},
-                {"params": low_resolution_parameters, "lr": init_lr, "name": "decoder_lowres"},
-                {"params": high_resolution_parameters, "lr": init_lr, "name": "decoder_highres"},
-            ]
-        )
+        optimizer_groups = [
+            {"params": backbone_parameters, "lr": init_lr, "name": "backbone"},
+        ]
+        lr_lambdas = [lambda epoch: self._lr_multiplier(epoch, "backbone")]
+        if getattr(self.G_render, "use_adapter", False):
+            optimizer_groups.append({
+                "params": list(self.G_render.adapter.parameters()),
+                "lr": init_lr,
+                "name": "adapter",
+            })
+            lr_lambdas.append(
+                lambda epoch: self._lr_multiplier(epoch, "adapter")
+            )
+        optimizer_groups.extend([
+            {"params": low_resolution_parameters, "lr": init_lr, "name": "decoder_lowres"},
+            {"params": high_resolution_parameters, "lr": init_lr, "name": "decoder_highres"},
+        ])
+        lr_lambdas.extend([
+            lambda epoch: self._lr_multiplier(epoch, "decoder_lowres"),
+            lambda epoch: self._lr_multiplier(epoch, "decoder_highres"),
+        ])
+        self.G_optim = torch.optim.Adam(optimizer_groups)
         self.G_lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             self.G_optim,
-            lr_lambda=[
-                lambda epoch: self._lr_multiplier(epoch, "backbone"),
-                lambda epoch: self._lr_multiplier(epoch, "decoder_lowres"),
-                lambda epoch: self._lr_multiplier(epoch, "decoder_highres"),
-            ],
+            lr_lambda=lr_lambdas,
         )
 
         # loss
@@ -217,10 +232,12 @@ class trainer():
     def _lr_multiplier(self, epoch, group_name):
         decay = self.lr_gamma ** (epoch // max(1, self.lr_step_size))
         stage = self._training_stage(epoch)
+        if group_name == "adapter":
+            return decay * self.adapter_lr_factor
         if stage == 0:
             return decay
         if stage == 1:
-            return decay if group_name == "backbone" else 0.0
+            return decay * self.stage1_backbone_lr_factor if group_name == "backbone" else 0.0
         if stage == 2:
             if group_name == "backbone":
                 return decay
@@ -262,20 +279,25 @@ class trainer():
 
         if stage == 0:
             self._set_trainable(self.G_render, True)
+            self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
         elif stage == 1:
-            self._set_trainable(self.G_render.encoder, True)
+            backbone_trainable = self.stage1_backbone_lr_factor > 0
+            self._set_trainable(self.G_render.encoder, backbone_trainable)
             if hasattr(self.G_render, "aggregator"):
-                self._set_trainable(self.G_render.aggregator, True)
+                self._set_trainable(self.G_render.aggregator, backbone_trainable)
+            self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
             self._set_trainable(self.G_render.decoder, False)
             # Frozen BatchNorm running statistics must remain fixed as well.
             self.G_render.decoder.eval()
         elif stage == 2:
             self._set_trainable(self.G_render, True)
+            self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
         else:
             backbone_trainable = self.stage3_backbone_lr_factor > 0
             self._set_trainable(self.G_render.encoder, backbone_trainable)
             if hasattr(self.G_render, "aggregator"):
                 self._set_trainable(self.G_render.aggregator, backbone_trainable)
+            self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
             self._set_trainable(self.G_render.decoder, False)
             self._set_trainable(self.G_render.decoder.up_blk_list[-1], True)
             self._set_trainable(self.G_render.decoder.out_blk, True)
@@ -376,21 +398,45 @@ class trainer():
             if os.path.exists(history_path):
                 data = torch.load(history_path, map_location=self.device)
         if data is not None:
-            if 'G_render' in data: self.G_render.load_state_dict(data['G_render'])
+            if 'G_render' in data:
+                if getattr(self.G_render, "use_adapter", False):
+                    incompatible = self.G_render.load_state_dict(
+                        data['G_render'], strict=False
+                    )
+                    invalid_missing = [
+                        key for key in incompatible.missing_keys
+                        if not key.startswith("adapter.")
+                    ]
+                    if invalid_missing or incompatible.unexpected_keys:
+                        raise RuntimeError(
+                            "Checkpoint/model mismatch. Missing keys: "
+                            f"{invalid_missing}; unexpected keys: "
+                            f"{incompatible.unexpected_keys}"
+                        )
+                    if incompatible.missing_keys:
+                        warnings.warn(
+                            "The resumed checkpoint predates LatentAdapter; adapter "
+                            "weights were initialized as an identity mapping.",
+                            stacklevel=2,
+                        )
+                else:
+                    self.G_render.load_state_dict(data['G_render'])
             if 'iter' in data: self.begin_epochs = data['iter']
             if 'global_step' in data: self.global_step = data['global_step']
             if 'prior_stem' in data and self.prior_stem is not None:
                 self.prior_stem.load_state_dict(data['prior_stem'], strict=True)
+            optimizer_restored = False
             if 'G_optim' in data:
                 try:
                     self.G_optim.load_state_dict(data['G_optim'])
+                    optimizer_restored = True
                 except ValueError:
                     warnings.warn(
                         "The checkpoint optimizer predates staged parameter groups; "
                         "model weights were restored but optimizer state was restarted.",
                         stacklevel=2,
                     )
-            if 'G_lr_scheduler' in data:
+            if 'G_lr_scheduler' in data and optimizer_restored:
                 try:
                     self.G_lr_scheduler.load_state_dict(data['G_lr_scheduler'])
                 except (KeyError, ValueError):

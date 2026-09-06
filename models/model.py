@@ -4,6 +4,7 @@ from torch.utils.checkpoint import checkpoint
 from models.ResEncoder import ResEncoder
 from models.SRGAN import generator
 from models.aggregator import adafusor, localfusor, meanfusor, varfusor
+from submodel.adapter import LatentAdapter
 
 # Main Model
 class model(nn.Module):
@@ -13,6 +14,8 @@ class model(nn.Module):
         device=None,
         query_chunk_size=25000,
         use_query_checkpoint=True,
+        use_adapter=False,
+        adapter_hidden_channels=64,
     ):
         super(model, self).__init__()
         self.device = device
@@ -26,6 +29,14 @@ class model(nn.Module):
         self.fusion = model_conf['fusion']
         self.encoder = ResEncoder(self.encoder_conf).to(device)
         self.decoder = generator(self.decoder_conf).to(device)
+        self.use_adapter = bool(use_adapter)
+        if self.use_adapter:
+            self.adapter = LatentAdapter(
+                channels=int(self.decoder_conf.inplanes),
+                hidden_channels=int(adapter_hidden_channels),
+            ).to(device)
+        else:
+            self.adapter = nn.Identity()
 
         self.aggregator_conf = model_conf['aggregator']
         if self.fusion == 'local':
@@ -73,6 +84,7 @@ class model(nn.Module):
 
     def forward(self, xyz_world, return_latent=False):
         latent = self.query_volume_latent(xyz_world)
+        latent = self.adapter(latent)
         outputs = self.decoder(latent)[0,0,:,:,:].transpose(0,2)    # align with ITK-SNAP display format。 这里实际上是拿到针对单个点的，从其在不同视角上的对应点的特征向量，这些特征向量是在维度上进行拼接的
                                                                     # ④ self.decoder(outputs)：★ decoder 3D 上采样 [1, 1, X, Y, Z]
                                                                     # [0,0,:,:,:].transpose(0,2)：⑤ 对齐 ITK-SNAP 显示格式

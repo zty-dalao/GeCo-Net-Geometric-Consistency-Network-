@@ -41,7 +41,36 @@ if __name__ == '__main__':
         device=device,
         query_chunk_size=args.query_chunk_size,
         use_query_checkpoint=not args.disable_query_checkpoint,
+        use_adapter=args.use_adapter,
+        adapter_hidden_channels=args.adapter_hidden_channels,
     )
+    if args.pretrained_backbone is not None and not args.resume:
+        backbone_checkpoint = torch.load(args.pretrained_backbone, map_location="cpu")
+        source_state = backbone_checkpoint.get("G_render", backbone_checkpoint)
+        backbone_state = {
+            key: value
+            for key, value in source_state.items()
+            if key.startswith("encoder.") or key.startswith("aggregator.")
+        }
+        if not backbone_state:
+            raise KeyError(
+                f"Main checkpoint {args.pretrained_backbone!r} has no encoder/aggregator weights."
+            )
+        incompatible = G_render.load_state_dict(backbone_state, strict=False)
+        unexpected = [
+            key for key in incompatible.unexpected_keys
+            if key.startswith("encoder.") or key.startswith("aggregator.")
+        ]
+        if unexpected:
+            raise RuntimeError(
+                "Unexpected encoder/aggregator keys while loading pretrained backbone: "
+                + ", ".join(unexpected)
+            )
+        print(
+            f"Loaded {len(backbone_state)} encoder/aggregator tensors from: "
+            f"{args.pretrained_backbone}"
+        )
+        del backbone_checkpoint, source_state, backbone_state
     if args.pretrained_decoder is not None and not args.resume:
         # Keep duplicated model/optimizer entries in the pretraining checkpoint
         # off the GPU; load_state_dict copies only decoder tensors to the model.

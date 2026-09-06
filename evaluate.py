@@ -101,6 +101,8 @@ if __name__ == '__main__':
         device=device,
         query_chunk_size=args.query_chunk_size,
         use_query_checkpoint=False,
+        use_adapter=args.use_adapter,
+        adapter_hidden_channels=args.adapter_hidden_channels,
     )
     if args.resume_name is not None:
         model_path = os.path.join(checkpoints_path, 'ckpt_history', 'ckpt_'+args.resume_name)

@@ -22,6 +22,14 @@ def parse_args():
     parser.add_argument("--datadir", "-D", type=str, default='dataset/dental/syn_data', help="Dataset directory")
     parser.add_argument("--device", type=str, default='cuda:0', help='compute device')
     parser.add_argument("--resume_name", type=str, default=None, help='resume which trained net for evaluate')
+    parser.add_argument(
+        "--use_adapter", action="store_true",
+        help="Build the model with the latent adapter used during training",
+    )
+    parser.add_argument(
+        "--adapter_hidden_channels", type=int, default=64,
+        help="Bottleneck channels in the latent adapter",
+    )
     parser.add_argument("--dataname", type=str, default='test', help="evaluate dataname") 
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
     parser.add_argument(
@@ -88,6 +96,8 @@ def parse_args():
         'soft_mask_lambda: ', str(args.soft_mask_lambda), '\n',
         'soft_window: [', str(args.soft_window_low), ', ', str(args.soft_window_high), '] HU\n',
         'ssim_lambda: ', str(args.ssim_lambda), '\n',
+        'use_adapter: ', "yes" if args.use_adapter else "no", '\n',
+        'adapter_hidden_channels: ', str(args.adapter_hidden_channels), '\n',
     ])
 
     exp_state = ''.join(exp_state_list)

@@ -35,6 +35,16 @@ class LatentAdapter(nn.Module):
         nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
 
+    def encode(self, z: torch.Tensor) -> torch.Tensor:
+        """Return the 64-channel local feature before output projection."""
+        for index in range(len(self.net) - 1):
+            z = self.net[index](z)
+        return z
+
+    def project(self, feature: torch.Tensor) -> torch.Tensor:
+        """Project a bottleneck feature back to the decoder channel count."""
+        return self.net[-1](feature)
+
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         if z.ndim != 5:
             raise ValueError(
@@ -44,4 +54,4 @@ class LatentAdapter(nn.Module):
             raise ValueError(
                 f"LatentAdapter expects {self.channels} channels, got {z.shape[1]}"
             )
-        return z + self.net(z)
+        return z + self.project(self.encode(z))

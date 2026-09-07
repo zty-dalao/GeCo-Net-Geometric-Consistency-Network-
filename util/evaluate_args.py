@@ -30,6 +30,14 @@ def parse_args():
         "--adapter_hidden_channels", type=int, default=64,
         help="Bottleneck channels in the latent adapter",
     )
+    parser.add_argument(
+        "--adapter_type", choices=("cnn", "transformer"), default="cnn",
+        help="Latent adapter architecture used by the checkpoint",
+    )
+    parser.add_argument("--adapter_transformer_pool_size", type=int, default=8)
+    parser.add_argument("--adapter_transformer_layers", type=int, default=2)
+    parser.add_argument("--adapter_transformer_heads", type=int, default=4)
+    parser.add_argument("--adapter_transformer_dropout", type=float, default=0.1)
     parser.add_argument("--dataname", type=str, default='test', help="evaluate dataname") 
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
     parser.add_argument(
@@ -98,6 +106,11 @@ def parse_args():
         'ssim_lambda: ', str(args.ssim_lambda), '\n',
         'use_adapter: ', "yes" if args.use_adapter else "no", '\n',
         'adapter_hidden_channels: ', str(args.adapter_hidden_channels), '\n',
+        'adapter_type: ', str(args.adapter_type), '\n',
+        'adapter_transformer_pool_size: ', str(args.adapter_transformer_pool_size), '\n',
+        'adapter_transformer_layers: ', str(args.adapter_transformer_layers), '\n',
+        'adapter_transformer_heads: ', str(args.adapter_transformer_heads), '\n',
+        'adapter_transformer_dropout: ', str(args.adapter_transformer_dropout), '\n',
     ])
 
     exp_state = ''.join(exp_state_list)

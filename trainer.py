@@ -11,6 +11,7 @@ import datetime
 from models.loss import *
 from submodel.decoder.loss import bone_gt_mask_l1, soft_tissue_gt_mask_l1, ssim_loss_3d
 from submodel.decoder.model import PriorFeatureStem
+from submodel.deep_encoder.model import LearnedPriorEncoder
 
 class trainer():
     def __init__(self, G_render, train_data_loader, val_data_loader, test_data_loader, visual_data_loader, args,
@@ -124,8 +125,10 @@ class trainer():
         else:
             self.G_scaler = torch.cuda.amp.GradScaler(enabled=self.amp_enabled)
 
-        # Frozen training-only teacher that maps downsampled pCT to the exact
-        # latent basis learned together with the pretrained decoder.
+        # Frozen training-only teacher that maps pCT to the exact latent basis
+        # learned with the pretrained decoder. The shallow teacher consumes a
+        # fixed average-pooled volume; the deep mean/detail teacher consumes
+        # the full-resolution pCT and performs its own decomposition.
         self.prior_stem = None
         if args.pretrained_decoder is not None:
             pretrained = torch.load(args.pretrained_decoder, map_location="cpu")
@@ -142,9 +145,15 @@ class trainer():
                         f"Checkpoint {args.pretrained_decoder!r} has no feature_stem weights."
                     )
             else:
-                self.prior_stem = PriorFeatureStem(
-                    int(self.G_render.decoder.inplanes)
-                ).to(device)
+                if args.prior_encoder_type == "deep":
+                    self.prior_stem = LearnedPriorEncoder(
+                        inplanes=int(self.G_render.decoder.inplanes),
+                        scale=int(self.G_render.decoder.scale),
+                    ).to(device)
+                else:
+                    self.prior_stem = PriorFeatureStem(
+                        int(self.G_render.decoder.inplanes)
+                    ).to(device)
                 self.prior_stem.load_state_dict(stem_state, strict=True)
                 self.prior_stem.eval()
                 for parameter in self.prior_stem.parameters():
@@ -363,6 +372,12 @@ class trainer():
             return None
         # SimpleITK/main-dataset volume is ZYX; decoder latent is XYZ.
         volume_xyz = volume_gt.permute(2, 1, 0).contiguous()[None, None]
+        if self.args.prior_encoder_type == "deep":
+            # This encoder needs full-resolution pCT to construct both the
+            # fixed mean channel and learned high-frequency residual channels.
+            with torch.no_grad():
+                with self._autocast():
+                    return self.prior_stem(volume_xyz)
         low_resolution = F.avg_pool3d(
             volume_xyz,
             kernel_size=self.G_render.decoder.scale,

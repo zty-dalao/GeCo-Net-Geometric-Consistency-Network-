@@ -57,8 +57,13 @@ Adapter 用于修正投影分支 latent 与 pCT 预训练 decoder 所使用 late
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
 | `--use_adapter` | 关闭 | 在 Aggregator 与 Decoder 之间启用 Adapter。训练和评估必须保持一致。 |
+| `--adapter_type` | `cnn` | Adapter类型：`cnn`为原始CNN版本，`transformer`为局部CNN与全局Transformer双分支版本。 |
 | `--adapter_hidden_channels` | `64` | Adapter 的 bottleneck 通道数。第一组实验建议保持64。 |
 | `--adapter_lr_factor` | `1.0` | Adapter 学习率相对于配置文件 `init_lr` 的倍率。设为0可冻结 Adapter。 |
+| `--adapter_transformer_pool_size` | `8` | 全局分支池化后的单轴尺寸；8对应512个token。 |
+| `--adapter_transformer_layers` | `2` | Transformer Encoder Block数量。 |
+| `--adapter_transformer_heads` | `4` | 多头注意力的head数量，必须整除hidden channels。 |
+| `--adapter_transformer_dropout` | `0.1` | Transformer注意力及FFN的dropout。 |
 | `--stage1_backbone_lr_factor` | `1.0` | 第一阶段 Encoder/Aggregator 的学习率倍率。设为0时，第一阶段只训练 Adapter。 |
 | `--pretrained_backbone PATH` | 无 | 从旧主模型 checkpoint 中只加载 Encoder 和 Aggregator，不加载旧 Decoder、优化器或训练轮数。 |
 | `--pretrained_decoder PATH` | 无 | 加载 submodel 预训练得到的原始 pCT Decoder，同时提供冻结的 `feature_stem` 作为 latent 教师。 |
@@ -202,7 +207,7 @@ epoch 200～399。不要同时期待 `--pretrained_decoder` 覆盖旧 Decoder；
 
 ## 7. 评估命令
 
-评估含 Adapter 的 checkpoint 时必须传入和训练时一致的两个结构参数：
+评估含 Adapter 的 checkpoint 时必须传入和训练时一致的结构参数：
 
 ```bash
 python evaluate.py \
@@ -250,3 +255,216 @@ checkpoint 不一致，严格加载会报错；这可以避免在无意中绕过
 若第二组在 Decoder 冻结的 Stage 1 就明显优于第一组，说明主要问题确实包含 latent
 接口不兼容。若 Adapter latent loss 下降但 PSNR/SSIM 几乎不变，则更可能是稀疏投影
 latent 本身缺少信息，需要进一步加入多尺度投影观测，而不是简单增加 Adapter 参数量。
+
+## 9. CNN + Transformer双分支Adapter
+
+Transformer版本实现在：
+
+```text
+submodel/adapter_with_transformer/model.py
+```
+
+主模型中的接入位置不变：
+
+```text
+Encoder → 几何查询 → Aggregator → TransformerLatentAdapter → Decoder
+```
+
+### 9.1 模型结构
+
+输入为：
+
+```text
+z_sparse [B,256,64,64,64]
+```
+
+完整结构为：
+
+```text
+z_sparse [B,256,64,64,64]
+       │
+       ├── 局部分支：直接复用现有 LatentAdapter
+       │     1×1×1 Conv：256→64
+       │     GELU
+       │     3×3×3 Conv：64→64
+       │     GELU
+       │     得到 local_feature [B,64,64,64,64]
+       │
+       └── 全局分支
+             1×1×1 Conv：256→64
+             GELU
+             ↓
+             AdaptiveAvgPool3d：8×8×8
+             ↓
+             [B,64,8,8,8]
+             ↓ flatten + transpose
+             512个token，每个token 64维
+             ↓
+             加入可学习3D位置序列编码
+             ↓
+             2个Transformer Encoder Block
+             每个Block：4-head attention + 128维FFN
+             ↓
+             恢复为 [B,64,8,8,8]
+             ↓
+             三线性插值到 [B,64,64,64,64]
+             ↓
+             global_feature
+                    │
+                    ▼
+       fused_feature = local_feature + global_feature
+                    ↓
+       复用现有LatentAdapter最后的1×1×1 Conv：64→256
+                    ↓
+                 residual
+                    ↓
+       z_out = z_sparse + residual
+```
+
+这里不是复制一套近似的CNN局部分支，而是代码层面直接实例化并复用
+`submodel.adapter.LatentAdapter`：
+
+```python
+self.local_adapter = LatentAdapter(256, 64)
+local_feature = self.local_adapter.encode(z_sparse)
+residual = self.local_adapter.project(local_feature + global_feature)
+```
+
+因此两种Adapter的局部结构保持一致，方便进行严格消融实验。
+
+默认配置下：
+
+```text
+hidden channels：64
+pool size：8×8×8
+token数量：512
+Transformer层数：2
+attention heads：4
+FFN维度：128
+参数量：259,904
+```
+
+最后的 `64→256` 卷积仍为零初始化，所以即使Transformer及位置编码为随机初始化，
+整个模块初始仍严格满足：
+
+```text
+TransformerLatentAdapter(z) = z
+```
+
+### 9.2 为什么不在64³空间直接做全局注意力
+
+`64×64×64`共有262,144个token，标准注意力矩阵规模与token数量平方成正比，
+无法在常规3D训练显存下使用。本实现先池化到`8×8×8`，只对512个token做全局
+注意力；局部细节由未池化的CNN分支保存。
+
+### 9.3 推荐训练命令
+
+建议从相同的旧主模型Encoder/Aggregator和原始prior decoder初始化，以便和CNN
+Adapter公平比较：
+
+```bash
+python train.py \
+  --name dental_prior_adapter_transformer \
+  --datadir ./dataset/dental/syn_data \
+  --datatype dental \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 \
+  --end 360 \
+  --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 200 \
+  --use_adapter \
+  --adapter_type transformer \
+  --adapter_hidden_channels 64 \
+  --adapter_transformer_pool_size 8 \
+  --adapter_transformer_layers 2 \
+  --adapter_transformer_heads 4 \
+  --adapter_transformer_dropout 0.1 \
+  --adapter_lr_factor 1.0 \
+  --pretrained_backbone train/checkpoints/dental_prior_transfer_after_refine/ckpt_history/ckpt_199 \
+  --pretrained_decoder submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_best_val.pt \
+  --latent_lambda 0.1 \
+  --latent_cosine_lambda 0.1 \
+  --stage1_epochs 20 \
+  --stage1_backbone_lr_factor 0 \
+  --stage2_epochs 100 \
+  --decoder_lr_factor 0.1 \
+  --stage3_backbone_lr_factor 0.01 \
+  --query_chunk_size 25000 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 \
+  --soft_window_high 240 \
+  --ssim_lambda 0.01
+```
+
+路径中的checkpoint名称是示例，必须替换为实际存在的文件。
+
+第一阶段设置 `--stage1_backbone_lr_factor 0` 后：
+
+```text
+Encoder/Aggregator：冻结
+Transformer Adapter：训练
+Decoder：冻结并保持eval
+```
+
+第二、第三阶段的训练逻辑与CNN Adapter一致。
+
+### 9.4 Transformer Adapter评估命令
+
+评估时必须使用与训练完全相同的结构参数：
+
+```bash
+python evaluate.py \
+  --name dental_prior_adapter_transformer \
+  --datadir ./dataset/dental/syn_data \
+  --datatype dental \
+  --train_scale 4 \
+  --eval_scale 4 \
+  --fusion ada \
+  --start 0 \
+  --end 360 \
+  --nviews 20 \
+  --angle_sampling uniform \
+  --resume_name 199 \
+  --use_adapter \
+  --adapter_type transformer \
+  --adapter_hidden_channels 64 \
+  --adapter_transformer_pool_size 8 \
+  --adapter_transformer_layers 2 \
+  --adapter_transformer_heads 4 \
+  --adapter_transformer_dropout 0.1 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 \
+  --soft_window_high 240 \
+  --ssim_lambda 0.01
+```
+
+训练和评估时只要pool size、层数、head数或hidden channels任意一个不一致，
+checkpoint都可能无法严格加载。原CNN Adapter checkpoint应继续使用：
+
+```text
+--use_adapter --adapter_type cnn
+```
+
+不能使用 `--resume` 把CNN Adapter checkpoint直接恢复成Transformer Adapter。
+如果希望复用CNN实验结果，应使用 `--pretrained_backbone` 只加载其中的Encoder和
+Aggregator，再单独加载原始prior decoder。
+
+### 9.5 建议消融顺序
+
+```text
+A. 无Adapter
+B. CNN Adapter（adapter_type=cnn）
+C. CNN + Transformer Adapter（adapter_type=transformer）
+```
+
+三组实验应使用同一个pretrained backbone、同一个prior decoder、相同数据划分和
+训练阶段。重点比较Train与Val/Test之间的差距。如果Transformer只提高Train PSNR，
+却不提高Val/Test PSNR，说明全局分支主要在记忆训练集解剖结构；如果Val/Test的
+PSNR、SSIM及骨骼/软组织损失同步改善，才能说明全局上下文有效。

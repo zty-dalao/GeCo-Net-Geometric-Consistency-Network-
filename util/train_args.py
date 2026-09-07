@@ -34,6 +34,12 @@ def parse_args():
         help="Decoder-pretraining checkpoint containing decoder and feature_stem keys",
     )
     parser.add_argument(
+        "--prior_encoder_type",
+        choices=("shallow", "deep"),
+        default="shallow",
+        help="Feature-stem architecture stored in the pretrained decoder checkpoint",
+    )
+    parser.add_argument(
         "--pretrained_backbone",
         type=str,
         default=None,
@@ -50,6 +56,16 @@ def parse_args():
         default=64,
         help="Bottleneck channels in the latent adapter",
     )
+    parser.add_argument(
+        "--adapter_type",
+        choices=("cnn", "transformer"),
+        default="cnn",
+        help="Latent adapter architecture",
+    )
+    parser.add_argument("--adapter_transformer_pool_size", type=int, default=8)
+    parser.add_argument("--adapter_transformer_layers", type=int, default=2)
+    parser.add_argument("--adapter_transformer_heads", type=int, default=4)
+    parser.add_argument("--adapter_transformer_dropout", type=float, default=0.1)
     parser.add_argument(
         "--adapter_lr_factor",
         type=float,
@@ -175,9 +191,15 @@ def parse_args():
 
     exp_state_list.extend([
         'pretrained_decoder: ', str(args.pretrained_decoder), '\n',
+        'prior_encoder_type: ', str(args.prior_encoder_type), '\n',
         'pretrained_backbone: ', str(args.pretrained_backbone), '\n',
         'use_adapter: ', "yes" if args.use_adapter else "no", '\n',
         'adapter_hidden_channels: ', str(args.adapter_hidden_channels), '\n',
+        'adapter_type: ', str(args.adapter_type), '\n',
+        'adapter_transformer_pool_size: ', str(args.adapter_transformer_pool_size), '\n',
+        'adapter_transformer_layers: ', str(args.adapter_transformer_layers), '\n',
+        'adapter_transformer_heads: ', str(args.adapter_transformer_heads), '\n',
+        'adapter_transformer_dropout: ', str(args.adapter_transformer_dropout), '\n',
         'adapter_lr_factor: ', str(args.adapter_lr_factor), '\n',
         'stage1_backbone_lr_factor: ', str(args.stage1_backbone_lr_factor), '\n',
         'latent_lambda: ', str(args.latent_lambda), '\n',

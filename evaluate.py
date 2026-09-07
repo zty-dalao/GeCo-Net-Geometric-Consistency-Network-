@@ -102,7 +102,12 @@ if __name__ == '__main__':
         query_chunk_size=args.query_chunk_size,
         use_query_checkpoint=False,
         use_adapter=args.use_adapter,
+        adapter_type=args.adapter_type,
         adapter_hidden_channels=args.adapter_hidden_channels,
+        adapter_transformer_pool_size=args.adapter_transformer_pool_size,
+        adapter_transformer_layers=args.adapter_transformer_layers,
+        adapter_transformer_heads=args.adapter_transformer_heads,
+        adapter_transformer_dropout=args.adapter_transformer_dropout,
     )
     if args.resume_name is not None:
         model_path = os.path.join(checkpoints_path, 'ckpt_history', 'ckpt_'+args.resume_name)

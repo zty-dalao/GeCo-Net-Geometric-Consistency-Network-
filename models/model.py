@@ -5,6 +5,7 @@ from models.ResEncoder import ResEncoder
 from models.SRGAN import generator
 from models.aggregator import adafusor, localfusor, meanfusor, varfusor
 from submodel.adapter import LatentAdapter
+from submodel.adapter_with_transformer import TransformerLatentAdapter
 
 # Main Model
 class model(nn.Module):
@@ -15,7 +16,12 @@ class model(nn.Module):
         query_chunk_size=25000,
         use_query_checkpoint=True,
         use_adapter=False,
+        adapter_type="cnn",
         adapter_hidden_channels=64,
+        adapter_transformer_pool_size=8,
+        adapter_transformer_layers=2,
+        adapter_transformer_heads=4,
+        adapter_transformer_dropout=0.1,
     ):
         super(model, self).__init__()
         self.device = device
@@ -30,11 +36,26 @@ class model(nn.Module):
         self.encoder = ResEncoder(self.encoder_conf).to(device)
         self.decoder = generator(self.decoder_conf).to(device)
         self.use_adapter = bool(use_adapter)
+        self.adapter_type = str(adapter_type).lower()
         if self.use_adapter:
-            self.adapter = LatentAdapter(
-                channels=int(self.decoder_conf.inplanes),
-                hidden_channels=int(adapter_hidden_channels),
-            ).to(device)
+            if self.adapter_type == "cnn":
+                self.adapter = LatentAdapter(
+                    channels=int(self.decoder_conf.inplanes),
+                    hidden_channels=int(adapter_hidden_channels),
+                ).to(device)
+            elif self.adapter_type == "transformer":
+                self.adapter = TransformerLatentAdapter(
+                    channels=int(self.decoder_conf.inplanes),
+                    hidden_channels=int(adapter_hidden_channels),
+                    pool_size=int(adapter_transformer_pool_size),
+                    num_layers=int(adapter_transformer_layers),
+                    num_heads=int(adapter_transformer_heads),
+                    dropout=float(adapter_transformer_dropout),
+                ).to(device)
+            else:
+                raise ValueError(
+                    f"Unsupported adapter_type {adapter_type!r}; use 'cnn' or 'transformer'."
+                )
         else:
             self.adapter = nn.Identity()
 

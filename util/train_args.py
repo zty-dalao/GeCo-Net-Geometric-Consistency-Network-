@@ -73,16 +73,10 @@ def parse_args():
         help="Adapter learning-rate multiplier relative to the base learning rate",
     )
     parser.add_argument(
-        "--stage1_backbone_lr_factor",
-        type=float,
-        default=1.0,
-        help="Encoder/aggregator LR multiplier in stage 1; set 0 for adapter-only stage 1",
-    )
-    parser.add_argument(
         "--latent_lambda",
         type=float,
         default=0.0,
-        help="Stage-1 weight of normalized latent alignment loss; requires --pretrained_decoder",
+        help="Initial weight of raw/cosine/statistical latent alignment; requires --pretrained_decoder",
     )
     parser.add_argument(
         "--latent_cosine_lambda",
@@ -91,28 +85,50 @@ def parse_args():
         help="Cosine term inside the latent alignment loss",
     )
     parser.add_argument(
-        "--stage1_epochs",
-        type=int,
-        default=15,
-        help="Number of initial epochs with the full decoder frozen",
+        "--latent_stat_lambda",
+        type=float,
+        default=0.1,
+        help="Weight of per-channel latent mean/std alignment terms",
+    )
+    parser.add_argument("--phase_a_epochs", type=int, default=20)
+    parser.add_argument("--phase_b_epochs", type=int, default=40)
+    parser.add_argument("--phase_c_epochs", type=int, default=80)
+    parser.add_argument("--phase_b_encoder_lr_factor", type=float, default=0.2)
+    parser.add_argument("--phase_b_aggregator_lr_factor", type=float, default=0.5)
+    parser.add_argument("--phase_c_backbone_lr_factor", type=float, default=0.1)
+    parser.add_argument("--phase_c_aggregator_lr_factor", type=float, default=0.3)
+    parser.add_argument("--phase_d_backbone_lr_factor", type=float, default=0.01)
+    parser.add_argument("--phase_d_aggregator_lr_factor", type=float, default=0.05)
+    parser.add_argument("--decoder_core_lr_factor", type=float, default=0.01)
+    parser.add_argument(
+        "--prior_anchor_lambda",
+        type=float,
+        default=0.1,
+        help="Phase-C prior-decoder output preservation weight",
     )
     parser.add_argument(
-        "--stage2_epochs",
-        type=int,
-        default=65,
-        help="Number of joint-training epochs after stage 1; remaining epochs are stage 3",
+        "--phase_d_anchor_factor",
+        type=float,
+        default=0.25,
+        help="Phase-D anchor weight relative to prior_anchor_lambda",
+    )
+    parser.add_argument(
+        "--phase_b_latent_end_factor",
+        type=float,
+        default=0.7,
+        help="Latent-weight factor reached at the end of phase B",
+    )
+    parser.add_argument(
+        "--phase_c_latent_end_factor",
+        type=float,
+        default=0.1,
+        help="Latent-weight factor reached at the end of phase C; phase D decays it to zero",
     )
     parser.add_argument(
         "--decoder_lr_factor",
         type=float,
         default=0.1,
-        help="Decoder learning-rate multiplier during stages 2 and 3",
-    )
-    parser.add_argument(
-        "--stage3_backbone_lr_factor",
-        type=float,
-        default=0.01,
-        help="Encoder/aggregator learning-rate multiplier in stage 3; set 0 to freeze them",
+        help="Learning-rate multiplier for progressively unfrozen decoder output/upsampling blocks",
     )
     parser.add_argument(
         "--bone_lambda",
@@ -201,13 +217,24 @@ def parse_args():
         'adapter_transformer_heads: ', str(args.adapter_transformer_heads), '\n',
         'adapter_transformer_dropout: ', str(args.adapter_transformer_dropout), '\n',
         'adapter_lr_factor: ', str(args.adapter_lr_factor), '\n',
-        'stage1_backbone_lr_factor: ', str(args.stage1_backbone_lr_factor), '\n',
         'latent_lambda: ', str(args.latent_lambda), '\n',
         'latent_cosine_lambda: ', str(args.latent_cosine_lambda), '\n',
-        'stage1_epochs: ', str(args.stage1_epochs), '\n',
-        'stage2_epochs: ', str(args.stage2_epochs), '\n',
+        'latent_stat_lambda: ', str(args.latent_stat_lambda), '\n',
+        'phase_epochs[A,B,C,D]: [', str(args.phase_a_epochs), ', ',
+        str(args.phase_b_epochs), ', ', str(args.phase_c_epochs), ', ',
+        str(max(0, args.epochs - args.phase_a_epochs - args.phase_b_epochs - args.phase_c_epochs)), ']\n',
+        'phase_b_encoder_lr_factor: ', str(args.phase_b_encoder_lr_factor), '\n',
+        'phase_b_aggregator_lr_factor: ', str(args.phase_b_aggregator_lr_factor), '\n',
+        'phase_c_backbone_lr_factor: ', str(args.phase_c_backbone_lr_factor), '\n',
+        'phase_c_aggregator_lr_factor: ', str(args.phase_c_aggregator_lr_factor), '\n',
+        'phase_d_backbone_lr_factor: ', str(args.phase_d_backbone_lr_factor), '\n',
+        'phase_d_aggregator_lr_factor: ', str(args.phase_d_aggregator_lr_factor), '\n',
+        'decoder_core_lr_factor: ', str(args.decoder_core_lr_factor), '\n',
+        'prior_anchor_lambda: ', str(args.prior_anchor_lambda), '\n',
+        'phase_d_anchor_factor: ', str(args.phase_d_anchor_factor), '\n',
+        'phase_b_latent_end_factor: ', str(args.phase_b_latent_end_factor), '\n',
+        'phase_c_latent_end_factor: ', str(args.phase_c_latent_end_factor), '\n',
         'decoder_lr_factor: ', str(args.decoder_lr_factor), '\n',
-        'stage3_backbone_lr_factor: ', str(args.stage3_backbone_lr_factor), '\n',
         'bone_lambda: ', str(args.bone_lambda), '\n',
         'bone_lower_hu: ', str(args.bone_lower_hu), '\n',
         'soft_mask_lambda: ', str(args.soft_mask_lambda), '\n',

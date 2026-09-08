@@ -1,10 +1,12 @@
 import os.path
 import itertools
+import copy
 import warnings
 from contextlib import nullcontext
 import torch.utils.data
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.checkpoint import checkpoint
 from models.render import *
 from util.util_func import *
 import datetime
@@ -39,6 +41,7 @@ class trainer():
         self.gd1_lambda = conf.get_float('train.G_loss.gd1_lambda')
         self.latent_lambda = args.latent_lambda
         self.latent_cosine_lambda = args.latent_cosine_lambda
+        self.latent_stat_lambda = args.latent_stat_lambda
         self.bone_lambda = args.bone_lambda
         self.soft_mask_lambda = args.soft_mask_lambda
         self.ssim_lambda = args.ssim_lambda
@@ -55,28 +58,58 @@ class trainer():
         if not self.is_train:
             self.num_epochs = self.num_epochs + 1
 
-        # A pretrained checkpoint activates staged transfer learning. Without
-        # one, the original joint-training behavior is preserved.
-        self.use_staged_training = bool(args.pretrained_decoder) and self.is_train
-        self.stage1_epochs = args.stage1_epochs
-        self.stage2_epochs = args.stage2_epochs
+        # Canonical four-phase transfer schedule. Phase D occupies all epochs
+        # remaining after A/B/C.
+        self.phase_a_epochs = args.phase_a_epochs
+        self.phase_b_epochs = args.phase_b_epochs
+        self.phase_c_epochs = args.phase_c_epochs
+        self.phase_d_epochs = self.num_epochs - sum((
+            self.phase_a_epochs, self.phase_b_epochs, self.phase_c_epochs,
+        ))
+        self.use_four_phase = bool(
+            self.is_train and args.pretrained_decoder and args.use_adapter
+        )
         self.decoder_lr_factor = args.decoder_lr_factor
-        self.stage3_backbone_lr_factor = args.stage3_backbone_lr_factor
-        self.stage1_backbone_lr_factor = args.stage1_backbone_lr_factor
         self.adapter_lr_factor = args.adapter_lr_factor
-        if self.stage1_epochs < 0 or self.stage2_epochs < 0:
-            raise ValueError("stage1_epochs and stage2_epochs must be non-negative")
-        if self.stage1_backbone_lr_factor < 0 or self.adapter_lr_factor < 0:
-            raise ValueError("stage1_backbone_lr_factor and adapter_lr_factor must be non-negative")
-        if min(self.latent_lambda, self.bone_lambda, self.soft_mask_lambda, self.ssim_lambda) < 0:
-            raise ValueError("latent_lambda, bone_lambda, soft_mask_lambda, and ssim_lambda must be non-negative")
-        if self.latent_lambda > 0 and not args.pretrained_decoder:
-            raise ValueError("--latent_lambda > 0 requires --pretrained_decoder")
-        if self.use_staged_training and self.stage1_epochs + self.stage2_epochs >= self.num_epochs:
+        self.phase_b_encoder_lr_factor = args.phase_b_encoder_lr_factor
+        self.phase_b_aggregator_lr_factor = args.phase_b_aggregator_lr_factor
+        self.phase_c_backbone_lr_factor = args.phase_c_backbone_lr_factor
+        self.phase_c_aggregator_lr_factor = args.phase_c_aggregator_lr_factor
+        self.phase_d_backbone_lr_factor = args.phase_d_backbone_lr_factor
+        self.phase_d_aggregator_lr_factor = args.phase_d_aggregator_lr_factor
+        self.decoder_core_lr_factor = args.decoder_core_lr_factor
+        self.prior_anchor_lambda = args.prior_anchor_lambda
+        self.phase_d_anchor_factor = args.phase_d_anchor_factor
+        self.phase_b_latent_end_factor = args.phase_b_latent_end_factor
+        self.phase_c_latent_end_factor = args.phase_c_latent_end_factor
+        nonnegative = (
+            self.latent_lambda, self.latent_cosine_lambda, self.latent_stat_lambda,
+            self.bone_lambda, self.soft_mask_lambda, self.ssim_lambda,
+            self.adapter_lr_factor, self.decoder_lr_factor,
+            self.phase_b_encoder_lr_factor, self.phase_b_aggregator_lr_factor,
+            self.phase_c_backbone_lr_factor, self.phase_c_aggregator_lr_factor,
+            self.phase_d_backbone_lr_factor, self.phase_d_aggregator_lr_factor,
+            self.decoder_core_lr_factor, self.prior_anchor_lambda,
+            self.phase_d_anchor_factor,
+        )
+        if any(value < 0 for value in nonnegative):
+            raise ValueError("Loss weights, LR factors, and anchor factors must be non-negative")
+        if min(self.phase_a_epochs, self.phase_b_epochs, self.phase_c_epochs) < 0:
+            raise ValueError("Phase A/B/C epoch counts must be non-negative")
+        if self.use_four_phase and self.phase_d_epochs <= 0:
+            raise ValueError("--epochs must leave at least one epoch for Phase D")
+        if not (0 <= self.phase_c_latent_end_factor <= self.phase_b_latent_end_factor <= 1):
+            raise ValueError("Require 0 <= phase_c_latent_end_factor <= phase_b_latent_end_factor <= 1")
+        if self.is_train and args.use_adapter and not args.pretrained_decoder:
             warnings.warn(
-                "No epochs remain for stage 3. Increase --epochs or reduce "
-                "--stage1_epochs/--stage2_epochs.",
+                "Adapter is enabled without a pretrained decoder; using ordinary joint "
+                "training because four-phase prior transfer is unavailable.",
                 stacklevel=2,
+            )
+        if self.use_four_phase and not (args.pretrained_backbone or args.resume):
+            raise ValueError(
+                "Phase A freezes Encoder/Aggregator, so four-phase training requires "
+                "--pretrained_backbone (or --resume)."
             )
 
         # render 
@@ -130,6 +163,7 @@ class trainer():
         # fixed average-pooled volume; the deep mean/detail teacher consumes
         # the full-resolution pCT and performs its own decomposition.
         self.prior_stem = None
+        self.prior_decoder_ref = None
         if args.pretrained_decoder is not None:
             pretrained = torch.load(args.pretrained_decoder, map_location="cpu")
             stem_state = pretrained.get("feature_stem")
@@ -139,12 +173,12 @@ class trainer():
                     for key, value in pretrained["model"].items()
                     if key.startswith("feature_stem.")
                 }
-            if not stem_state:
-                if self.latent_lambda > 0:
-                    raise KeyError(
-                        f"Checkpoint {args.pretrained_decoder!r} has no feature_stem weights."
-                    )
-            else:
+            if not stem_state and self.use_four_phase:
+                raise KeyError(
+                    f"Checkpoint {args.pretrained_decoder!r} has no feature_stem weights "
+                    "required by four-phase latent supervision and prior anchor."
+                )
+            elif stem_state:
                 if args.prior_encoder_type == "deep":
                     self.prior_stem = LearnedPriorEncoder(
                         inplanes=int(self.G_render.decoder.inplanes),
@@ -158,6 +192,18 @@ class trainer():
                 self.prior_stem.eval()
                 for parameter in self.prior_stem.parameters():
                     parameter.requires_grad = False
+            if self.use_four_phase and self.prior_anchor_lambda > 0:
+                decoder_state = pretrained.get("decoder")
+                if decoder_state is None:
+                    raise KeyError(
+                        f"Checkpoint {args.pretrained_decoder!r} has no decoder weights "
+                        "required by --prior_anchor_lambda."
+                    )
+                self.prior_decoder_ref = copy.deepcopy(self.G_render.decoder).to(device)
+                self.prior_decoder_ref.load_state_dict(decoder_state, strict=True)
+                self.prior_decoder_ref.eval()
+                for parameter in self.prior_decoder_ref.parameters():
+                    parameter.requires_grad = False
             del pretrained
 
         # lr scheduler & optimizer
@@ -167,42 +213,39 @@ class trainer():
         gamma = conf.get_float('lr_sche.gamma')         # 每次衰减为原来的 0.5
         self.lr_step_size = step_size
         self.lr_gamma = gamma
-        high_resolution_parameters = list(
-            itertools.chain(
-                self.G_render.decoder.up_blk_list[-1].parameters(),
-                self.G_render.decoder.out_blk.parameters(),
-            )
-        )
-        high_resolution_ids = {id(parameter) for parameter in high_resolution_parameters}
-        low_resolution_parameters = [
-            parameter
-            for parameter in self.G_render.decoder.parameters()
-            if id(parameter) not in high_resolution_ids
-        ]
+        encoder_late_parameters = []
+        encoder_early_parameters = []
+        for name, parameter in self.G_render.encoder.named_parameters():
+            destination = encoder_late_parameters if name.startswith(
+                ("model.layer3.", "model.layer4.")
+            ) else encoder_early_parameters
+            destination.append(parameter)
         aggregator = getattr(self.G_render, "aggregator", None)
         aggregator_parameters = [] if aggregator is None else list(aggregator.parameters())
-        backbone_parameters = list(self.G_render.encoder.parameters()) + aggregator_parameters
+        decoder_core_parameters = list(itertools.chain(
+            self.G_render.decoder.in_blk.parameters(),
+            self.G_render.decoder.res_blk_list.parameters(),
+            self.G_render.decoder.res_blk_last.parameters(),
+        ))
+        decoder_up_low_parameters = list(itertools.chain.from_iterable(
+            block.parameters() for block in self.G_render.decoder.up_blk_list[:-1]
+        ))
+        decoder_up_high_parameters = list(self.G_render.decoder.up_blk_list[-1].parameters())
+        decoder_out_parameters = list(self.G_render.decoder.out_blk.parameters())
         optimizer_groups = [
-            {"params": backbone_parameters, "lr": init_lr, "name": "backbone"},
+            {"params": encoder_early_parameters, "lr": init_lr, "name": "encoder_early"},
+            {"params": encoder_late_parameters, "lr": init_lr, "name": "encoder_late"},
+            {"params": aggregator_parameters, "lr": init_lr, "name": "aggregator"},
+            {"params": list(self.G_render.adapter.parameters()), "lr": init_lr, "name": "adapter"},
+            {"params": decoder_core_parameters, "lr": init_lr, "name": "decoder_core"},
+            {"params": decoder_up_low_parameters, "lr": init_lr, "name": "decoder_up_low"},
+            {"params": decoder_up_high_parameters, "lr": init_lr, "name": "decoder_up_high"},
+            {"params": decoder_out_parameters, "lr": init_lr, "name": "decoder_out"},
         ]
-        lr_lambdas = [lambda epoch: self._lr_multiplier(epoch, "backbone")]
-        if getattr(self.G_render, "use_adapter", False):
-            optimizer_groups.append({
-                "params": list(self.G_render.adapter.parameters()),
-                "lr": init_lr,
-                "name": "adapter",
-            })
-            lr_lambdas.append(
-                lambda epoch: self._lr_multiplier(epoch, "adapter")
-            )
-        optimizer_groups.extend([
-            {"params": low_resolution_parameters, "lr": init_lr, "name": "decoder_lowres"},
-            {"params": high_resolution_parameters, "lr": init_lr, "name": "decoder_highres"},
-        ])
-        lr_lambdas.extend([
-            lambda epoch: self._lr_multiplier(epoch, "decoder_lowres"),
-            lambda epoch: self._lr_multiplier(epoch, "decoder_highres"),
-        ])
+        lr_lambdas = [
+            (lambda epoch, name=group["name"]: self._lr_multiplier(epoch, name))
+            for group in optimizer_groups
+        ]
         self.G_optim = torch.optim.Adam(optimizer_groups)
         self.G_lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             self.G_optim,
@@ -223,13 +266,15 @@ class trainer():
         self._apply_training_stage(self.begin_epochs)
 
     def _training_stage(self, epoch):
-        if not self.use_staged_training:
+        if not self.use_four_phase:
             return 0
-        if epoch < self.stage1_epochs:
+        if epoch < self.phase_a_epochs:
             return 1
-        if epoch < self.stage1_epochs + self.stage2_epochs:
+        if epoch < self.phase_a_epochs + self.phase_b_epochs:
             return 2
-        return 3
+        if epoch < self.phase_a_epochs + self.phase_b_epochs + self.phase_c_epochs:
+            return 3
+        return 4
 
     def _autocast(self):
         if not self.amp_enabled:
@@ -246,28 +291,93 @@ class trainer():
         if stage == 0:
             return decay
         if stage == 1:
-            return decay * self.stage1_backbone_lr_factor if group_name == "backbone" else 0.0
+            return 0.0
         if stage == 2:
-            if group_name == "backbone":
-                return decay
-            return decay * self.decoder_lr_factor
-        if group_name == "backbone":
-            return decay * self.stage3_backbone_lr_factor
-        if group_name == "decoder_highres":
-            return decay * self.decoder_lr_factor
+            factors = {
+                "encoder_late": self.phase_b_encoder_lr_factor,
+                "aggregator": self.phase_b_aggregator_lr_factor,
+            }
+            return decay * factors.get(group_name, 0.0)
+        if stage == 3:
+            factors = {
+                "encoder_early": self.phase_c_backbone_lr_factor,
+                "encoder_late": self.phase_c_backbone_lr_factor,
+                "aggregator": self.phase_c_aggregator_lr_factor,
+                "decoder_out": self.decoder_lr_factor,
+            }
+            decoder_level = self._phase_c_decoder_level(epoch)
+            if decoder_level >= 2:
+                factors["decoder_up_high"] = self.decoder_lr_factor
+            if decoder_level >= 3:
+                factors["decoder_up_low"] = self.decoder_lr_factor
+            if decoder_level >= 4:
+                factors["decoder_core"] = self.decoder_core_lr_factor
+            return decay * factors.get(group_name, 0.0)
+        if stage == 4:
+            factors = {
+                "encoder_early": self.phase_d_backbone_lr_factor,
+                "encoder_late": self.phase_d_backbone_lr_factor,
+                "aggregator": self.phase_d_aggregator_lr_factor,
+                "decoder_out": self.decoder_lr_factor,
+                "decoder_up_high": self.decoder_lr_factor,
+                "decoder_up_low": self.decoder_lr_factor,
+                "decoder_core": self.decoder_core_lr_factor,
+            }
+            return decay * factors.get(group_name, 0.0)
         return 0.0
+
+    @staticmethod
+    def _linear_value(start, end, index, length):
+        if length <= 1:
+            return end
+        progress = min(1.0, max(0.0, index / (length - 1)))
+        return start + (end - start) * progress
+
+    def _phase_c_decoder_level(self, epoch):
+        """1=output, 2=last up block, 3=earlier up blocks, 4=residual core."""
+        if self.phase_c_epochs <= 0:
+            return 4
+        phase_start = self.phase_a_epochs + self.phase_b_epochs
+        progress = (epoch - phase_start) / max(1, self.phase_c_epochs)
+        return min(4, max(1, int(progress * 4) + 1))
 
     def _latent_weight(self, epoch):
         if self.prior_stem is None or self.latent_lambda <= 0:
             return 0.0
         stage = self._training_stage(epoch)
-        if stage in (0, 1):
+        if stage == 1:
             return self.latent_lambda
-        if stage == 3 or self.stage2_epochs <= 0:
+        if stage == 2:
+            index = epoch - self.phase_a_epochs
+            factor = self._linear_value(
+                1.0, self.phase_b_latent_end_factor, index, self.phase_b_epochs,
+            )
+        elif stage == 3:
+            index = epoch - self.phase_a_epochs - self.phase_b_epochs
+            factor = self._linear_value(
+                self.phase_b_latent_end_factor,
+                self.phase_c_latent_end_factor,
+                index,
+                self.phase_c_epochs,
+            )
+        elif stage == 4:
+            index = epoch - self.phase_a_epochs - self.phase_b_epochs - self.phase_c_epochs
+            factor = self._linear_value(
+                self.phase_c_latent_end_factor, 0.0, index, self.phase_d_epochs,
+            )
+        else:
             return 0.0
-        stage2_index = epoch - self.stage1_epochs
-        progress = stage2_index / max(1, self.stage2_epochs - 1)
-        return 0.5 * self.latent_lambda * max(0.0, 1.0 - progress)
+        return self.latent_lambda * factor
+
+    def _anchor_weight(self, epoch):
+        if self.prior_decoder_ref is None or self.prior_anchor_lambda <= 0:
+            return 0.0
+        stage = self._training_stage(epoch)
+        if stage == 3:
+            return self.prior_anchor_lambda
+        if stage == 4:
+            return self.prior_anchor_lambda * self.phase_d_anchor_factor
+        return 0.0
 
     @staticmethod
     def _set_trainable(module, trainable):
@@ -289,41 +399,122 @@ class trainer():
         if stage == 0:
             self._set_trainable(self.G_render, True)
             self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
-        elif stage == 1:
-            backbone_trainable = self.stage1_backbone_lr_factor > 0
-            self._set_trainable(self.G_render.encoder, backbone_trainable)
-            if hasattr(self.G_render, "aggregator"):
-                self._set_trainable(self.G_render.aggregator, backbone_trainable)
-            self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
-            self._set_trainable(self.G_render.decoder, False)
-            # Frozen BatchNorm running statistics must remain fixed as well.
-            self.G_render.decoder.eval()
-        elif stage == 2:
-            self._set_trainable(self.G_render, True)
-            self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
-        else:
-            backbone_trainable = self.stage3_backbone_lr_factor > 0
-            self._set_trainable(self.G_render.encoder, backbone_trainable)
-            if hasattr(self.G_render, "aggregator"):
-                self._set_trainable(self.G_render.aggregator, backbone_trainable)
-            self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
-            self._set_trainable(self.G_render.decoder, False)
-            self._set_trainable(self.G_render.decoder.up_blk_list[-1], True)
-            self._set_trainable(self.G_render.decoder.out_blk, True)
-            self.G_render.decoder.in_blk.eval()
-            self.G_render.decoder.res_blk_list.eval()
-            self.G_render.decoder.res_blk_last.eval()
-            for block in self.G_render.decoder.up_blk_list[:-1]:
-                block.eval()
+            if self.prior_stem is not None:
+                self.prior_stem.eval()
+            if self.prior_decoder_ref is not None:
+                self.prior_decoder_ref.eval()
+            return
+
+        # Start from an entirely frozen network, then enable only the groups
+        # belonging to the current phase. This also prevents stale requires_grad
+        # flags when crossing a phase boundary or resuming a checkpoint.
+        self._set_trainable(self.G_render, False)
+        self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
+        self.G_render.encoder.eval()
+        aggregator = getattr(self.G_render, "aggregator", None)
+        if aggregator is not None:
+            aggregator.eval()
+        self.G_render.decoder.eval()
+        self.G_render.adapter.train(self.adapter_lr_factor > 0)
+
+        if stage == 2:
+            for layer in (self.G_render.encoder.model.layer3, self.G_render.encoder.model.layer4):
+                self._set_trainable(layer, self.phase_b_encoder_lr_factor > 0)
+                layer.train(self.phase_b_encoder_lr_factor > 0)
+            if aggregator is not None:
+                self._set_trainable(aggregator, self.phase_b_aggregator_lr_factor > 0)
+                aggregator.train(self.phase_b_aggregator_lr_factor > 0)
+        elif stage in (3, 4):
+            backbone_factor = (
+                self.phase_c_backbone_lr_factor if stage == 3
+                else self.phase_d_backbone_lr_factor
+            )
+            aggregator_factor = (
+                self.phase_c_aggregator_lr_factor if stage == 3
+                else self.phase_d_aggregator_lr_factor
+            )
+            self._set_trainable(self.G_render.encoder, backbone_factor > 0)
+            self.G_render.encoder.train(backbone_factor > 0)
+            if aggregator is not None:
+                self._set_trainable(aggregator, aggregator_factor > 0)
+                aggregator.train(aggregator_factor > 0)
+
+            decoder_level = self._phase_c_decoder_level(epoch) if stage == 3 else 4
+            decoder_modules = [self.G_render.decoder.out_blk]
+            if decoder_level >= 2:
+                decoder_modules.append(self.G_render.decoder.up_blk_list[-1])
+            if decoder_level >= 3:
+                decoder_modules.extend(self.G_render.decoder.up_blk_list[:-1])
+            if decoder_level >= 4:
+                decoder_modules.extend((
+                    self.G_render.decoder.in_blk,
+                    self.G_render.decoder.res_blk_list,
+                    self.G_render.decoder.res_blk_last,
+                ))
+            for module in decoder_modules:
+                self._set_trainable(module, True)
+                module.train()
 
         if self.prior_stem is not None:
             self.prior_stem.eval()
+        if self.prior_decoder_ref is not None:
+            self.prior_decoder_ref.eval()
 
     @staticmethod
     def _normalize_latent(latent):
         mean = latent.mean(dim=(2, 3, 4), keepdim=True)
         std = latent.std(dim=(2, 3, 4), keepdim=True, unbiased=False)
         return (latent - mean) / (std + 1e-6)
+
+    def _latent_terms(self, projection_latent, prior_latent):
+        raw = F.smooth_l1_loss(projection_latent, prior_latent)
+        cosine = 1.0 - F.cosine_similarity(
+            projection_latent.flatten(2), prior_latent.flatten(2), dim=1,
+        ).mean()
+        projection_mean = projection_latent.mean(dim=(2, 3, 4))
+        prior_mean = prior_latent.mean(dim=(2, 3, 4))
+        projection_std = projection_latent.std(dim=(2, 3, 4), unbiased=False)
+        prior_std = prior_latent.std(dim=(2, 3, 4), unbiased=False)
+        mean_loss = F.l1_loss(projection_mean, prior_mean)
+        std_loss = F.l1_loss(projection_std, prior_std)
+        normalized = F.smooth_l1_loss(
+            self._normalize_latent(projection_latent),
+            self._normalize_latent(prior_latent),
+        )
+        combined = raw + self.latent_cosine_lambda * cosine + self.latent_stat_lambda * (
+            mean_loss + std_loss
+        )
+        return {
+            "combined": combined,
+            "raw": raw,
+            "cosine": cosine,
+            "mean": mean_loss,
+            "std": std_loss,
+            "normalized_monitor": normalized,
+        }
+
+    def _decoder_anchor_loss(self, prior_latent):
+        if self.prior_decoder_ref is None:
+            return prior_latent.new_zeros(())
+        decoder = self.G_render.decoder
+        training_states = {module: module.training for module in decoder.modules()}
+        decoder.eval()
+        try:
+            with self._autocast():
+                if torch.is_grad_enabled():
+                    current = checkpoint(decoder, prior_latent, use_reentrant=False)
+                else:
+                    current = decoder(prior_latent)
+                current = self.G_render.last_layer_act(current)
+                with torch.no_grad():
+                    reference = self.G_render.last_layer_act(
+                        self.prior_decoder_ref(prior_latent)
+                    )
+        finally:
+            # Restore exact per-submodule states without recursive train() calls.
+            for module, state in training_states.items():
+                module.training = state
+        return F.l1_loss(current, reference)
 
     @staticmethod
     def _mu_to_hu(volume):
@@ -386,6 +577,49 @@ class trainer():
         with torch.no_grad():
             with self._autocast():
                 return self.prior_stem(low_resolution)
+
+    def _latent_and_anchor_losses(self, projection_latent, volume_gt, epoch):
+        if not self.use_four_phase:
+            zero = projection_latent.new_zeros(())
+            return {
+                "latent_loss": zero,
+                "latent_smooth_l1_raw": zero,
+                "latent_cosine_raw": zero,
+                "latent_mean_l1_raw": zero,
+                "latent_std_l1_raw": zero,
+                "latent_normalized_smooth_l1_raw": zero,
+                "prior_anchor_raw": zero,
+                "prior_anchor_loss": zero,
+            }, 0.0, 0.0
+        prior_latent = self._make_prior_latent(volume_gt)
+        if prior_latent is None:
+            raise RuntimeError("Four-phase training requires a loaded prior encoder")
+        if projection_latent.shape != prior_latent.shape:
+            raise RuntimeError(
+                "Projection/prior latent shape mismatch: "
+                f"{tuple(projection_latent.shape)} vs {tuple(prior_latent.shape)}. "
+                "Check XYZ/ZYX ordering, prior encoder type, and decoder scale."
+            )
+        latent_weight = self._latent_weight(epoch)
+        anchor_weight = self._anchor_weight(epoch)
+        terms = self._latent_terms(projection_latent, prior_latent)
+        latent_loss = terms["combined"] * latent_weight
+        anchor_raw = (
+            self._decoder_anchor_loss(prior_latent)
+            if anchor_weight > 0 else projection_latent.new_zeros(())
+        )
+        anchor_loss = anchor_raw * anchor_weight
+        values = {
+            "latent_loss": latent_loss,
+            "latent_smooth_l1_raw": terms["raw"],
+            "latent_cosine_raw": terms["cosine"],
+            "latent_mean_l1_raw": terms["mean"],
+            "latent_std_l1_raw": terms["std"],
+            "latent_normalized_smooth_l1_raw": terms["normalized_monitor"],
+            "prior_anchor_raw": anchor_raw,
+            "prior_anchor_loss": anchor_loss,
+        }
+        return values, latent_weight, anchor_weight
         
     def save_ckpt(self, epoch):
         data = {
@@ -447,7 +681,7 @@ class trainer():
                     optimizer_restored = True
                 except ValueError:
                     warnings.warn(
-                        "The checkpoint optimizer predates staged parameter groups; "
+                        "The checkpoint optimizer does not match the four-phase parameter groups; "
                         "model weights were restored but optimizer state was restarted.",
                         stacklevel=2,
                     )
@@ -512,34 +746,12 @@ class trainer():
         else:
             loss_dict['gd1_loss'] = 0.0
 
-        latent_weight = self._latent_weight(epoch)
-        if latent_weight > 0:
-            prior_latent = self._make_prior_latent(volume_gt)
-            if projection_latent.shape != prior_latent.shape:
-                raise RuntimeError(
-                    "Projection/prior latent shape mismatch: "
-                    f"{tuple(projection_latent.shape)} vs {tuple(prior_latent.shape)}. "
-                    "Check XYZ/ZYX ordering and decoder scale."
-                )
-            projection_latent_norm = self._normalize_latent(projection_latent)
-            prior_latent_norm = self._normalize_latent(prior_latent)
-            latent_l1 = F.smooth_l1_loss(projection_latent_norm, prior_latent_norm)
-            latent_cosine = 1.0 - F.cosine_similarity(
-                projection_latent_norm.flatten(2),
-                prior_latent_norm.flatten(2),
-                dim=1,
-            ).mean()
-            latent_loss = latent_weight * (
-                latent_l1 + self.latent_cosine_lambda * latent_cosine
-            )
-            G_loss += latent_loss
-            loss_dict['latent_loss'] = round(latent_loss.item(), 8)
-            loss_dict['latent_smooth_l1_raw'] = round(latent_l1.item(), 8)
-            loss_dict['latent_cosine_raw'] = round(latent_cosine.item(), 8)
-        else:
-            loss_dict['latent_loss'] = 0.0
-            loss_dict['latent_smooth_l1_raw'] = 0.0
-            loss_dict['latent_cosine_raw'] = 0.0
+        latent_values, latent_weight, anchor_weight = self._latent_and_anchor_losses(
+            projection_latent, volume_gt, epoch,
+        )
+        for key, value in latent_values.items():
+            loss_dict[key] = round(value.item(), 8)
+        G_loss += latent_values["latent_loss"] + latent_values["prior_anchor_loss"]
 
         optional_losses = self._regional_and_ssim_losses(volume_predict, volume_gt)
         for key, value in optional_losses.items():
@@ -584,11 +796,15 @@ class trainer():
         for key in (
             'mse_loss_3d', 'gd1_loss', 'mse_loss_2d', 'latent_loss',
             'latent_smooth_l1_raw', 'latent_cosine_raw',
+            'latent_mean_l1_raw', 'latent_std_l1_raw',
+            'latent_normalized_smooth_l1_raw',
+            'prior_anchor_raw', 'prior_anchor_loss',
             'bone_gt_mask_raw', 'bone_gt_mask_loss',
             'soft_mask_raw', 'soft_mask_loss', 'ssim_loss_raw', 'ssim_loss',
         ):
             self.writer.add_scalar(f"step/train_{key}", loss_dict[key], self.global_step)
         self.writer.add_scalar("step/latent_weight", latent_weight, self.global_step)
+        self.writer.add_scalar("step/prior_anchor_weight", anchor_weight, self.global_step)
         self.writer.add_scalar("step/training_stage", self.current_stage, self.global_step)
         for group in self.G_optim.param_groups:
             self.writer.add_scalar(
@@ -667,33 +883,12 @@ class trainer():
         else:
             loss_dict['gd1_loss'] = 0.0
 
-        latent_weight = self._latent_weight(epoch)
-        if latent_weight > 0:
-            prior_latent = self._make_prior_latent(volume_gt)
-            if projection_latent.shape != prior_latent.shape:
-                raise RuntimeError(
-                    "Projection/prior latent shape mismatch during evaluation: "
-                    f"{tuple(projection_latent.shape)} vs {tuple(prior_latent.shape)}"
-                )
-            projection_latent_norm = self._normalize_latent(projection_latent)
-            prior_latent_norm = self._normalize_latent(prior_latent)
-            latent_l1 = F.smooth_l1_loss(projection_latent_norm, prior_latent_norm)
-            latent_cosine = 1.0 - F.cosine_similarity(
-                projection_latent_norm.flatten(2),
-                prior_latent_norm.flatten(2),
-                dim=1,
-            ).mean()
-            latent_loss = latent_weight * (
-                latent_l1 + self.latent_cosine_lambda * latent_cosine
-            )
-            total_loss += latent_loss
-            loss_dict['latent_loss'] = round(latent_loss.item(), 8)
-            loss_dict['latent_smooth_l1_raw'] = round(latent_l1.item(), 8)
-            loss_dict['latent_cosine_raw'] = round(latent_cosine.item(), 8)
-        else:
-            loss_dict['latent_loss'] = 0.0
-            loss_dict['latent_smooth_l1_raw'] = 0.0
-            loss_dict['latent_cosine_raw'] = 0.0
+        latent_values, _, _ = self._latent_and_anchor_losses(
+            projection_latent, volume_gt, epoch,
+        )
+        for key, value in latent_values.items():
+            loss_dict[key] = round(value.item(), 8)
+        total_loss += latent_values["latent_loss"] + latent_values["prior_anchor_loss"]
 
         optional_losses = self._regional_and_ssim_losses(volume_predict, volume_gt)
         for key, value in optional_losses.items():
@@ -791,6 +986,11 @@ class trainer():
             'latent_loss',
             'latent_smooth_l1_raw',
             'latent_cosine_raw',
+            'latent_mean_l1_raw',
+            'latent_std_l1_raw',
+            'latent_normalized_smooth_l1_raw',
+            'prior_anchor_raw',
+            'prior_anchor_loss',
             'bone_gt_mask_raw',
             'bone_gt_mask_loss',
             'soft_mask_raw',

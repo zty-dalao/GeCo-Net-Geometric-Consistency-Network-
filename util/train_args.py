@@ -93,6 +93,12 @@ def parse_args():
     parser.add_argument("--phase_a_epochs", type=int, default=20)
     parser.add_argument("--phase_b_epochs", type=int, default=40)
     parser.add_argument("--phase_c_epochs", type=int, default=80)
+    parser.add_argument(
+        "--phase_c_hold_epochs",
+        type=int,
+        default=0,
+        help="Extra Phase-C epochs after progressive decoder unfreezing; decoder remains fully unfrozen",
+    )
     parser.add_argument("--phase_b_encoder_lr_factor", type=float, default=0.2)
     parser.add_argument("--phase_b_aggregator_lr_factor", type=float, default=0.5)
     parser.add_argument("--phase_c_backbone_lr_factor", type=float, default=0.1)
@@ -220,9 +226,11 @@ def parse_args():
         'latent_lambda: ', str(args.latent_lambda), '\n',
         'latent_cosine_lambda: ', str(args.latent_cosine_lambda), '\n',
         'latent_stat_lambda: ', str(args.latent_stat_lambda), '\n',
-        'phase_epochs[A,B,C,D]: [', str(args.phase_a_epochs), ', ',
+        'phase_epochs[A,B,C-progressive,C-hold,D]: [', str(args.phase_a_epochs), ', ',
         str(args.phase_b_epochs), ', ', str(args.phase_c_epochs), ', ',
-        str(max(0, args.epochs - args.phase_a_epochs - args.phase_b_epochs - args.phase_c_epochs)), ']\n',
+        str(args.phase_c_hold_epochs), ', ',
+        str(max(0, args.epochs - args.phase_a_epochs - args.phase_b_epochs
+                - args.phase_c_epochs - args.phase_c_hold_epochs)), ']\n',
         'phase_b_encoder_lr_factor: ', str(args.phase_b_encoder_lr_factor), '\n',
         'phase_b_aggregator_lr_factor: ', str(args.phase_b_aggregator_lr_factor), '\n',
         'phase_c_backbone_lr_factor: ', str(args.phase_c_backbone_lr_factor), '\n',

@@ -63,8 +63,10 @@ class trainer():
         self.phase_a_epochs = args.phase_a_epochs
         self.phase_b_epochs = args.phase_b_epochs
         self.phase_c_epochs = args.phase_c_epochs
+        self.phase_c_hold_epochs = args.phase_c_hold_epochs
         self.phase_d_epochs = self.num_epochs - sum((
             self.phase_a_epochs, self.phase_b_epochs, self.phase_c_epochs,
+            self.phase_c_hold_epochs,
         ))
         self.use_four_phase = bool(
             self.is_train and args.pretrained_decoder and args.use_adapter
@@ -94,8 +96,13 @@ class trainer():
         )
         if any(value < 0 for value in nonnegative):
             raise ValueError("Loss weights, LR factors, and anchor factors must be non-negative")
-        if min(self.phase_a_epochs, self.phase_b_epochs, self.phase_c_epochs) < 0:
-            raise ValueError("Phase A/B/C epoch counts must be non-negative")
+        if min(
+            self.phase_a_epochs,
+            self.phase_b_epochs,
+            self.phase_c_epochs,
+            self.phase_c_hold_epochs,
+        ) < 0:
+            raise ValueError("Phase A/B/C and Phase-C hold epoch counts must be non-negative")
         if self.use_four_phase and self.phase_d_epochs <= 0:
             raise ValueError("--epochs must leave at least one epoch for Phase D")
         if not (0 <= self.phase_c_latent_end_factor <= self.phase_b_latent_end_factor <= 1):
@@ -272,7 +279,12 @@ class trainer():
             return 1
         if epoch < self.phase_a_epochs + self.phase_b_epochs:
             return 2
-        if epoch < self.phase_a_epochs + self.phase_b_epochs + self.phase_c_epochs:
+        if epoch < (
+            self.phase_a_epochs
+            + self.phase_b_epochs
+            + self.phase_c_epochs
+            + self.phase_c_hold_epochs
+        ):
             return 3
         return 4
 
@@ -361,7 +373,13 @@ class trainer():
                 self.phase_c_epochs,
             )
         elif stage == 4:
-            index = epoch - self.phase_a_epochs - self.phase_b_epochs - self.phase_c_epochs
+            index = (
+                epoch
+                - self.phase_a_epochs
+                - self.phase_b_epochs
+                - self.phase_c_epochs
+                - self.phase_c_hold_epochs
+            )
             factor = self._linear_value(
                 self.phase_c_latent_end_factor, 0.0, index, self.phase_d_epochs,
             )

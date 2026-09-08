@@ -140,6 +140,7 @@ python train.py \
   --phase_a_epochs 20 \
   --phase_b_epochs 40 \
   --phase_c_epochs 80 \
+  --phase_c_hold_epochs 0 \
   --phase_b_encoder_lr_factor 0.2 \
   --phase_b_aggregator_lr_factor 0.5 \
   --phase_c_backbone_lr_factor 0.1 \
@@ -189,6 +190,7 @@ ls submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_latest.pt
 | `--phase_a_epochs` | 20 | 只训练Adapter的轮数。 |
 | `--phase_b_epochs` | 40 | 独立Phase B轮数，只放开Encoder后部和Aggregator。 |
 | `--phase_c_epochs` | 80 | Decoder由后向前分四段解冻的总轮数。 |
+| `--phase_c_hold_epochs` | 0 | Phase C完成渐进解冻后，保持Decoder完全解冻的额外轮数。 |
 | `--phase_b_encoder_lr_factor` | 0.2 | Phase B中layer3/layer4相对基础LR。 |
 | `--phase_b_aggregator_lr_factor` | 0.5 | Phase B中Aggregator相对基础LR。 |
 | `--phase_c_backbone_lr_factor` | 0.1 | Phase C中完整Encoder相对基础LR。 |
@@ -202,10 +204,35 @@ ls submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_latest.pt
 Phase D 轮数为：
 
 ```text
-epochs - phase_a_epochs - phase_b_epochs - phase_c_epochs
+epochs - phase_a_epochs - phase_b_epochs - phase_c_epochs - phase_c_hold_epochs
 ```
 
 必须至少为 1。配置文件原有的 step/gamma 学习率衰减仍会乘到上述倍率上。
+
+例如设置：
+
+```bash
+--epochs 300 \
+--phase_a_epochs 20 \
+--phase_b_epochs 40 \
+--phase_c_epochs 80 \
+--phase_c_hold_epochs 50
+```
+
+阶段会变成：
+
+```text
+Phase A             0～19
+Phase B            20～59
+Phase C渐进解冻     60～139
+Phase C完全解冻保持 140～189
+Phase D           190～299
+```
+
+`phase_c_hold_epochs` 不参与四个解冻子阶段的等分，因此不会改变原来的解冻节点；
+保持期使用 Phase C 的 Encoder、Aggregator、Adapter、Decoder 学习率以及完整 anchor，
+latent 权重保持在 `phase_c_latent_end_factor` 对应的末端值。进入 Phase D 后，latent
+才从该值继续平滑衰减到0。
 
 ### 5.2 latent与anchor
 

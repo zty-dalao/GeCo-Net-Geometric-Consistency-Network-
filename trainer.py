@@ -497,23 +497,42 @@ class trainer():
         if self.prior_decoder_ref is None:
             return prior_latent.new_zeros(())
         decoder = self.G_render.decoder
-        training_states = {module: module.training for module in decoder.modules()}
-        decoder.eval()
-        try:
-            with self._autocast():
-                if torch.is_grad_enabled():
-                    current = checkpoint(decoder, prior_latent, use_reentrant=False)
-                else:
-                    current = decoder(prior_latent)
-                current = self.G_render.last_layer_act(current)
-                with torch.no_grad():
-                    reference = self.G_render.last_layer_act(
-                        self.prior_decoder_ref(prior_latent)
-                    )
-        finally:
-            # Restore exact per-submodule states without recursive train() calls.
-            for module, state in training_states.items():
-                module.training = state
+
+        def decoder_eval_forward(latent):
+            """Run the current decoder without updating BatchNorm statistics.
+
+            Activation checkpointing calls this function once in the original
+            forward and again during backward recomputation.  The temporary
+            eval state must therefore live *inside* the checkpointed function;
+            restoring it outside checkpoint() makes the recomputation use the
+            phase's train/eval state and changes BatchNorm saved-tensor metadata.
+            """
+            training_states = {
+                module: module.training for module in decoder.modules()
+            }
+            decoder.eval()
+            try:
+                return decoder(latent)
+            finally:
+                # Direct assignment restores mixed states exactly: in early
+                # Phase C only selected decoder children are in train mode.
+                for module, state in training_states.items():
+                    module.training = state
+
+        with self._autocast():
+            if torch.is_grad_enabled():
+                current = checkpoint(
+                    decoder_eval_forward,
+                    prior_latent,
+                    use_reentrant=False,
+                )
+            else:
+                current = decoder_eval_forward(prior_latent)
+            current = self.G_render.last_layer_act(current)
+            with torch.no_grad():
+                reference = self.G_render.last_layer_act(
+                    self.prior_decoder_ref(prior_latent)
+                )
         return F.l1_loss(current, reference)
 
     @staticmethod

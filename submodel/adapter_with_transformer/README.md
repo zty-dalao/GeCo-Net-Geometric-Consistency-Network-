@@ -328,7 +328,82 @@ evaluate/visuals/dental_prior_adapter_transformer_four_phase/
 额外报告骨/软组织/局部SSIM loss，可再传对应loss参数；它们不会改变预测结果、PSNR、
 `ssim_3d_clamp`或NIfTI输出。
 
-## 9. 观察重点
+## 9. train/val/test指标监控
+
+CNN Adapter 和 Transformer Adapter 都没有在各自的 `model.py` 中计算指标，而是
+统一复用根目录 `trainer.py`。因此，只要使用第4节命令通过根目录 `train.py` 训练，
+Transformer Adapter 会自动获得与 `submodel/adapter` 完全相同的主模型指标监控，
+不需要在 Adapter 内部重复实现 PSNR。
+
+当前各数据划分监控如下：
+
+| 数据划分 | PSNR | SSIM | 执行频率 |
+|---|---|---|---|
+| train | `psnr_3d_clamp` | 默认不计算三维评估SSIM | 每个epoch |
+| val | `psnr_3d_clamp` | `ssim_3d_clamp` | 每`val_interval`个epoch及最后一轮 |
+| test | `psnr_3d_clamp` | `ssim_3d_clamp` | 每`test_interval`个epoch及最后一轮 |
+| visual | `psnr_3d_clamp` | `ssim_3d_clamp` | 每`vis_interval`个epoch及最后一轮 |
+
+TensorBoard 中对应的 epoch 标签为：
+
+```text
+epoch/train_psnr_3d_clamp
+epoch/val_psnr_3d_clamp
+epoch/val_ssim_3d_clamp
+epoch/test_psnr_3d_clamp
+epoch/test_ssim_3d_clamp
+```
+
+训练集默认只计算 PSNR，是因为 `get_ssim_3d` 会把完整三维体积搬到 CPU，并分别沿
+三个方向计算结构相似度；若对每个训练样本、每个 epoch 都执行，会显著拖慢训练。
+这里的 `ssim_loss_raw` 是参与/监控损失的可微局部三维 SSIM loss，不能与用于最终
+报告的 `ssim_3d_clamp` 混为一谈。
+
+文本指标同时写入：
+
+```text
+train/logs/<实验名>/train_metric.txt
+train/logs/<实验名>/val_metric.txt
+train/logs/<实验名>/test_metric.txt
+```
+
+TensorBoard 数据位于：
+
+```text
+train/logs/<实验名>/tensorboard/
+```
+
+配置文件 `conf/train.conf` 当前默认：
+
+```text
+val_interval  = 10
+test_interval = 10
+vis_interval  = 10
+```
+
+所以训练开始后，train PSNR 每轮都会出现，而 val/test PSNR 和 SSIM 通常到第10轮
+才首次出现（代码还要求 `epoch > 0`）。如果训练尚未成功启动，或者只训练到第0～9轮，
+TensorBoard 中看不到 val/test 曲线是正常的，并不表示 Transformer Adapter 缺少指标代码。
+
+除PSNR/SSIM外，三个划分还统一记录以下 epoch loss：
+
+```text
+G_loss
+mse_loss_3d / mse_loss_2d
+gd1_loss
+latent_loss
+latent_smooth_l1_raw
+latent_cosine_raw
+latent_mean_l1_raw
+latent_std_l1_raw
+latent_normalized_smooth_l1_raw
+prior_anchor_raw / prior_anchor_loss
+bone_gt_mask_raw / bone_gt_mask_loss
+soft_mask_raw / soft_mask_loss
+ssim_loss_raw / ssim_loss
+```
+
+## 10. 观察重点
 
 - Phase A：冻结 Decoder 时，`D_pre(A(z_sparse))` 是否明显优于无Adapter；
 - Phase B：raw、cosine、mean、std是否同步改善，而不只是标准化latent指标下降；

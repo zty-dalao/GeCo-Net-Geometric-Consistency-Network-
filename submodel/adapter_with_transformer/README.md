@@ -34,9 +34,20 @@ z_sparse [B,256,64,64,64]
 
 ## 2. 当前唯一训练流程：Phase A/B/C/D
 
-旧三阶段参数已经移除。训练必须同时提供 `--pretrained_backbone`、
+旧三阶段参数已经移除。四阶段训练必须同时提供 `--pretrained_backbone`、
 `--pretrained_decoder` 和 `--use_adapter`。以总共 200 epoch，A/B/C 分别为
 20/40/80 epoch 为例，Phase D 自动使用剩余 60 epoch：
+
+当前四阶段方案不支持“随机初始化主模型后，Phase A 只训练 Adapter”的所谓
+`from_scratch` 用法。因为随机的 Encoder/Aggregator 会在 Phase A 被冻结，Adapter
+只能拟合没有意义的随机 latent。这里的“从 epoch 0 开始新实验”应理解为：
+
+```text
+加载已有主模型的 Encoder/Aggregator
++ 加载原始 pCT prior Decoder
++ 新建并恒等初始化 Transformer Adapter
++ 不恢复旧实验的优化器，从 Phase A 的 epoch 0 开始训练
+```
 
 | 阶段 | epoch | Encoder | Aggregator | Adapter | Decoder | latent教师 | prior anchor |
 |---|---:|---|---|---|---|---|---|
@@ -101,7 +112,7 @@ Decoder 参数显存；当前 Decoder 的 anchor 前向使用激活重计算以�
 
 ```bash
 python train.py \
-  --name dental_prior_adapter_transformer \
+  --name dental_prior_adapter_transformer_four_phase \
   --datadir ./dataset/dental/syn_data \
   --datatype dental \
   --train_scale 4 \
@@ -113,7 +124,7 @@ python train.py \
   --is_train \
   --epochs 200 \
   --pretrained_backbone train/checkpoints/dental_prior_transfer_after_refine/ckpt_history/ckpt_199 \
-  --pretrained_decoder submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_best_val.pt \
+  --pretrained_decoder submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_latest.pt \
   --prior_encoder_type shallow \
   --use_adapter \
   --adapter_type transformer \
@@ -158,6 +169,16 @@ python train.py \
 ```
 
 不要把 deep checkpoint 与 `shallow` 混用。
+
+运行前建议检查两个文件确实存在：
+
+```bash
+ls train/checkpoints/dental_prior_transfer_after_refine/ckpt_history/ckpt_199
+ls submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_latest.pt
+```
+
+如果你的权重文件名是 `ckpt_best_val.pt`，则只需把命令中的
+`--pretrained_decoder` 路径换成实际文件，不影响四阶段逻辑。
 
 ## 5. 参数解释
 
@@ -227,11 +248,50 @@ Phase D 会逐 epoch 连续衰减到 0，而不是在边界突然关闭 latent �
 200轮。旧三阶段 checkpoint 的优化器参数组与当前实现不同，因此不建议用它直接恢复；
 为公平比较，应使用新的实验名从 epoch 0 开始。
 
-## 7. 评估命令
+## 7. 旧命令迁移与常见报错
+
+以下旧参数已经从 `train.py` 删除：
+
+```text
+--stage1_epochs
+--stage1_backbone_lr_factor
+--stage2_epochs
+--stage3_backbone_lr_factor
+```
+
+如果继续传入，会出现：
+
+```text
+train.py: error: unrecognized arguments: --stage1_epochs ...
+```
+
+这不是模型、CUDA或checkpoint报错，而是命令仍在使用已删除的三阶段参数。请直接
+采用第4节的完整四阶段命令。大致迁移关系为：
+
+| 旧参数/行为 | 新参数/行为 |
+|---|---|
+| `stage1_epochs` | `phase_a_epochs`，但Phase A现在固定只训练Adapter |
+| 原Stage 1同时训练主干 | 独立的Phase B训练Encoder后部和Aggregator |
+| `stage2_epochs` | `phase_b_epochs`和`phase_c_epochs`分别控制适配、Decoder解冻 |
+| `stage3_backbone_lr_factor` | `phase_d_backbone_lr_factor` |
+| Decoder一次性解冻 | Phase C中由后向前分四段解冻 |
+| latent在边界关闭 | Phase D平滑衰减到0 |
+
+如果不提供 `--pretrained_backbone`，还会出现：
+
+```text
+Phase A freezes Encoder/Aggregator, so four-phase training requires
+--pretrained_backbone (or --resume).
+```
+
+因此不能只删除旧参数后继续使用 `dental_prior_adapter_transformer_from_scratch` 的
+训练含义；必须补充有效的主模型 backbone checkpoint。
+
+## 8. 评估命令
 
 ```bash
 python evaluate.py \
-  --name dental_prior_adapter_transformer \
+  --name dental_prior_adapter_transformer_four_phase \
   --datadir ./dataset/dental/syn_data \
   --datatype dental \
   --train_scale 4 \
@@ -254,21 +314,21 @@ python evaluate.py \
 该命令加载：
 
 ```text
-train/checkpoints/dental_prior_adapter_transformer/ckpt_history/ckpt_199
+train/checkpoints/dental_prior_adapter_transformer_four_phase/ckpt_history/ckpt_199
 ```
 
 结果保存在：
 
 ```text
-evaluate/logs/dental_prior_adapter_transformer/
-evaluate/visuals/dental_prior_adapter_transformer/
+evaluate/logs/dental_prior_adapter_transformer_four_phase/
+evaluate/visuals/dental_prior_adapter_transformer_four_phase/
 ```
 
 评估不构造训练期teacher和anchor参考网络，因此不传prior、latent或阶段参数。若希望
 额外报告骨/软组织/局部SSIM loss，可再传对应loss参数；它们不会改变预测结果、PSNR、
 `ssim_3d_clamp`或NIfTI输出。
 
-## 8. 观察重点
+## 9. 观察重点
 
 - Phase A：冻结 Decoder 时，`D_pre(A(z_sparse))` 是否明显优于无Adapter；
 - Phase B：raw、cosine、mean、std是否同步改善，而不只是标准化latent指标下降；

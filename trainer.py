@@ -42,6 +42,7 @@ class trainer():
         self.latent_lambda = args.latent_lambda
         self.latent_cosine_lambda = args.latent_cosine_lambda
         self.latent_stat_lambda = args.latent_stat_lambda
+        self.freeze_decoder_bn_stats = args.freeze_decoder_bn_stats
         self.bone_lambda = args.bone_lambda
         self.soft_mask_lambda = args.soft_mask_lambda
         self.ssim_lambda = args.ssim_lambda
@@ -421,6 +422,7 @@ class trainer():
                 self.prior_stem.eval()
             if self.prior_decoder_ref is not None:
                 self.prior_decoder_ref.eval()
+            self._apply_decoder_bn_policy()
             return
 
         # Start from an entirely frozen network, then enable only the groups
@@ -477,6 +479,17 @@ class trainer():
             self.prior_stem.eval()
         if self.prior_decoder_ref is not None:
             self.prior_decoder_ref.eval()
+        self._apply_decoder_bn_policy()
+
+    def _apply_decoder_bn_policy(self):
+        """Freeze BN running stats without freezing its learnable affine terms."""
+        if not self.freeze_decoder_bn_stats:
+            return
+        for module in self.G_render.decoder.modules():
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                # eval selects the stored running_mean/running_var. It does not
+                # alter requires_grad on BatchNorm weight or bias.
+                module.eval()
 
     @staticmethod
     def _normalize_latent(latent):
@@ -700,11 +713,18 @@ class trainer():
                             f"{incompatible.unexpected_keys}"
                         )
                     if incompatible.missing_keys:
-                        warnings.warn(
-                            "The resumed checkpoint predates LatentAdapter; adapter "
-                            "weights were initialized as an identity mapping.",
-                            stacklevel=2,
-                        )
+                        if incompatible.missing_keys == ["adapter.global_alpha"]:
+                            warnings.warn(
+                                "The resumed checkpoint predates Transformer global alpha; "
+                                "adapter.global_alpha keeps its configured initial value.",
+                                stacklevel=2,
+                            )
+                        else:
+                            warnings.warn(
+                                "The resumed checkpoint predates LatentAdapter; adapter "
+                                "weights were initialized as an identity mapping.",
+                                stacklevel=2,
+                            )
                 else:
                     self.G_render.load_state_dict(data['G_render'])
             if 'iter' in data: self.begin_epochs = data['iter']
@@ -843,6 +863,13 @@ class trainer():
         self.writer.add_scalar("step/latent_weight", latent_weight, self.global_step)
         self.writer.add_scalar("step/prior_anchor_weight", anchor_weight, self.global_step)
         self.writer.add_scalar("step/training_stage", self.current_stage, self.global_step)
+        global_alpha = getattr(self.G_render.adapter, "global_alpha", None)
+        if global_alpha is not None:
+            self.writer.add_scalar(
+                "step/adapter_global_alpha",
+                global_alpha.detach(),
+                self.global_step,
+            )
         for group in self.G_optim.param_groups:
             self.writer.add_scalar(
                 f"step/lr_{group.get('name', 'group')}",
@@ -862,7 +889,9 @@ class trainer():
             volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
             # 3d ssim calculation is too slow, so we only calculate psnr
             loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
-        self.G_render.train()
+        # Restore the exact mixed train/eval state of the current phase. This
+        # also reapplies the optional Decoder-BN running-statistics policy.
+        self._apply_training_stage(epoch)
         return loss_dict
 
     def test_step(self, data, epoch=0):

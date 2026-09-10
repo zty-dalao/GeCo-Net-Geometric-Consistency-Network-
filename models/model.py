@@ -22,6 +22,8 @@ class model(nn.Module):
         adapter_transformer_layers=2,
         adapter_transformer_heads=4,
         adapter_transformer_dropout=0.1,
+        adapter_use_global_alpha=False,
+        adapter_global_alpha_init=0.0,
     ):
         super(model, self).__init__()
         self.device = device
@@ -39,6 +41,10 @@ class model(nn.Module):
         self.adapter_type = str(adapter_type).lower()
         if self.use_adapter:
             if self.adapter_type == "cnn":
+                if adapter_use_global_alpha:
+                    raise ValueError(
+                        "--adapter_use_global_alpha requires --adapter_type transformer"
+                    )
                 self.adapter = LatentAdapter(
                     channels=int(self.decoder_conf.inplanes),
                     hidden_channels=int(adapter_hidden_channels),
@@ -51,6 +57,8 @@ class model(nn.Module):
                     num_layers=int(adapter_transformer_layers),
                     num_heads=int(adapter_transformer_heads),
                     dropout=float(adapter_transformer_dropout),
+                    use_global_alpha=bool(adapter_use_global_alpha),
+                    global_alpha_init=float(adapter_global_alpha_init),
                 ).to(device)
             else:
                 raise ValueError(

@@ -1,4 +1,5 @@
 import os
+import warnings
 from data.Dataset import CBCTDataset
 from util.evaluate_args import parse_args
 import datetime
@@ -108,11 +109,31 @@ if __name__ == '__main__':
         adapter_transformer_layers=args.adapter_transformer_layers,
         adapter_transformer_heads=args.adapter_transformer_heads,
         adapter_transformer_dropout=args.adapter_transformer_dropout,
+        adapter_use_global_alpha=args.adapter_use_global_alpha,
+        adapter_global_alpha_init=args.adapter_global_alpha_init,
     )
     if args.resume_name is not None:
         model_path = os.path.join(checkpoints_path, 'ckpt_history', 'ckpt_'+args.resume_name)
         data = torch.load(model_path, map_location=device)
-        G_render.load_state_dict(data['G_render'])
+        if args.adapter_use_global_alpha:
+            incompatible = G_render.load_state_dict(data['G_render'], strict=False)
+            invalid_missing = [
+                key for key in incompatible.missing_keys
+                if key != "adapter.global_alpha"
+            ]
+            if invalid_missing or incompatible.unexpected_keys:
+                raise RuntimeError(
+                    "Checkpoint/model mismatch. Missing keys: "
+                    f"{invalid_missing}; unexpected keys: {incompatible.unexpected_keys}"
+                )
+            if "adapter.global_alpha" in incompatible.missing_keys:
+                warnings.warn(
+                    "Checkpoint predates global alpha; initialized adapter.global_alpha "
+                    f"to {args.adapter_global_alpha_init}.",
+                    stacklevel=2,
+                )
+        else:
+            G_render.load_state_dict(data['G_render'])
 
     # dataset & dataloader
     evaluate_dataset = CBCTDataset(args, args.dataname)

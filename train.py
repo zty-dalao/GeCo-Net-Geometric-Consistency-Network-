@@ -48,6 +48,8 @@ if __name__ == '__main__':
         adapter_transformer_layers=args.adapter_transformer_layers,
         adapter_transformer_heads=args.adapter_transformer_heads,
         adapter_transformer_dropout=args.adapter_transformer_dropout,
+        adapter_use_global_alpha=args.adapter_use_global_alpha,
+        adapter_global_alpha_init=args.adapter_global_alpha_init,
     )
     if args.pretrained_backbone is not None and not args.resume:
         backbone_checkpoint = torch.load(args.pretrained_backbone, map_location="cpu")

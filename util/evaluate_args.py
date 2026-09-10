@@ -38,6 +38,17 @@ def parse_args():
     parser.add_argument("--adapter_transformer_layers", type=int, default=2)
     parser.add_argument("--adapter_transformer_heads", type=int, default=4)
     parser.add_argument("--adapter_transformer_dropout", type=float, default=0.1)
+    parser.add_argument(
+        "--adapter_use_global_alpha",
+        action="store_true",
+        help="Build Transformer adapter with its learnable global-feature alpha",
+    )
+    parser.add_argument("--adapter_global_alpha_init", type=float, default=0.0)
+    parser.add_argument(
+        "--freeze_decoder_bn_stats",
+        action="store_true",
+        help="Accepted for command parity; evaluation already uses eval mode",
+    )
     parser.add_argument("--dataname", type=str, default='test', help="evaluate dataname") 
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
     parser.add_argument(
@@ -111,6 +122,9 @@ def parse_args():
         'adapter_transformer_layers: ', str(args.adapter_transformer_layers), '\n',
         'adapter_transformer_heads: ', str(args.adapter_transformer_heads), '\n',
         'adapter_transformer_dropout: ', str(args.adapter_transformer_dropout), '\n',
+        'adapter_use_global_alpha: ', "yes" if args.adapter_use_global_alpha else "no", '\n',
+        'adapter_global_alpha_init: ', str(args.adapter_global_alpha_init), '\n',
+        'freeze_decoder_bn_stats: ', "yes" if args.freeze_decoder_bn_stats else "no", '\n',
     ])
 
     exp_state = ''.join(exp_state_list)

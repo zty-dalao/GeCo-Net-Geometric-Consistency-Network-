@@ -21,6 +21,7 @@ z_sparse [B,256,64,64,64]
              512个token + 可学习位置编码
              2个Transformer Encoder Block（默认4 heads）
              三线性上采样到64×64×64
+             可选：乘以零初始化的可学习标量alpha
                     │
                     ▼
              局部特征 + 全局特征
@@ -133,6 +134,9 @@ python train.py \
   --adapter_transformer_layers 2 \
   --adapter_transformer_heads 4 \
   --adapter_transformer_dropout 0.1 \
+  --adapter_use_global_alpha \
+  --adapter_global_alpha_init 0.0 \
+  --freeze_decoder_bn_stats \
   --adapter_lr_factor 1.0 \
   --latent_lambda 0.1 \
   --latent_cosine_lambda 0.1 \
@@ -260,6 +264,46 @@ Phase D 会逐 epoch 连续衰减到 0，而不是在边界突然关闭 latent �
 | `--adapter_transformer_layers` | 2 | Transformer Block数量。 |
 | `--adapter_transformer_heads` | 4 | 注意力头数，必须整除hidden channels。 |
 | `--adapter_transformer_dropout` | 0.1 | 注意力和FFN的dropout。 |
+| `--adapter_use_global_alpha` | 关闭 | 用一个可学习标量缩放整个Transformer全局特征。 |
+| `--adapter_global_alpha_init` | 0.0 | `alpha`初值；推荐保持0，使全局分支从零贡献逐渐进入。 |
+| `--freeze_decoder_bn_stats` | 关闭 | 训练时固定Decoder中全部BatchNorm的running mean/variance。 |
+
+### 5.4 Decoder BN与Transformer alpha开关
+
+推荐黄色模型后续实验同时加入：
+
+```bash
+--freeze_decoder_bn_stats \
+--adapter_use_global_alpha \
+--adapter_global_alpha_init 0.0
+```
+
+`--freeze_decoder_bn_stats`不会修改Decoder网络结构、参数形状或checkpoint键。它只让
+Decoder内所有BatchNorm在训练前向中使用pCT预训练阶段保存的`running_mean`和
+`running_var`，并停止更新这两个缓冲量。Decoder卷积仍按Phase C/D正常训练；BN的
+可学习`weight`和`bias`是否训练仍由当前解冻阶段决定。
+
+`alpha`不是把Transformer权重全部初始化为0，也不是给不同位置随机分配0。它是一个
+单独的标量参数，计算方式为：
+
+```text
+f_fused = f_local + alpha * f_global
+alpha初值 = 0
+```
+
+因此开始时全局分支对融合结果贡献为0，随后由梯度学习其作用强度和正负方向。启用后
+TensorBoard会额外记录`step/adapter_global_alpha`。
+
+兼容性说明：
+
+- 原pCT Decoder checkpoint可继续严格加载，Decoder本身没有新增任何参数；
+- 不开启`--adapter_use_global_alpha`时，Transformer Adapter的state_dict键也与旧版一致；
+- 开启该开关并恢复旧Transformer checkpoint时，只允许缺少
+  `adapter.global_alpha`，程序会按`--adapter_global_alpha_init`补建；
+- 因为优化器多了一个标量参数，恢复旧checkpoint时旧优化器状态可能无法匹配，程序会
+  保留模型权重并重新初始化优化器状态；这不是Decoder权重加载失败；
+- 保存过alpha的新checkpoint，在训练和评估时都必须继续传
+  `--adapter_use_global_alpha`，否则会出现unexpected key，这是为了避免静默使用错误结构。
 
 ## 6. 继续训练
 
@@ -335,7 +379,9 @@ python evaluate.py \
   --adapter_transformer_pool_size 8 \
   --adapter_transformer_layers 2 \
   --adapter_transformer_heads 4 \
-  --adapter_transformer_dropout 0.1
+  --adapter_transformer_dropout 0.1 \
+  --adapter_use_global_alpha \
+  --adapter_global_alpha_init 0.0
 ```
 
 该命令加载：
@@ -350,6 +396,10 @@ train/checkpoints/dental_prior_adapter_transformer_four_phase/ckpt_history/ckpt_
 evaluate/logs/dental_prior_adapter_transformer_four_phase/
 evaluate/visuals/dental_prior_adapter_transformer_four_phase/
 ```
+
+评估时整个模型本来就处于eval模式，Decoder BN不会更新，所以不需要传
+`--freeze_decoder_bn_stats`。但若待评估checkpoint含有alpha，则必须传
+`--adapter_use_global_alpha`以构造相同结构；`alpha`的实际值会由checkpoint覆盖。
 
 评估不构造训练期teacher和anchor参考网络，因此不传prior、latent或阶段参数。若希望
 额外报告骨/软组织/局部SSIM loss，可再传对应loss参数；它们不会改变预测结果、PSNR、

@@ -67,6 +67,22 @@ def parse_args():
     parser.add_argument("--adapter_transformer_heads", type=int, default=4)
     parser.add_argument("--adapter_transformer_dropout", type=float, default=0.1)
     parser.add_argument(
+        "--adapter_use_global_alpha",
+        action="store_true",
+        help="Gate the Transformer global feature with a learnable scalar alpha",
+    )
+    parser.add_argument(
+        "--adapter_global_alpha_init",
+        type=float,
+        default=0.0,
+        help="Initial value of the optional Transformer global-feature alpha",
+    )
+    parser.add_argument(
+        "--freeze_decoder_bn_stats",
+        action="store_true",
+        help="Keep Decoder BatchNorm running mean/variance fixed while training",
+    )
+    parser.add_argument(
         "--adapter_lr_factor",
         type=float,
         default=1.0,
@@ -222,6 +238,9 @@ def parse_args():
         'adapter_transformer_layers: ', str(args.adapter_transformer_layers), '\n',
         'adapter_transformer_heads: ', str(args.adapter_transformer_heads), '\n',
         'adapter_transformer_dropout: ', str(args.adapter_transformer_dropout), '\n',
+        'adapter_use_global_alpha: ', "yes" if args.adapter_use_global_alpha else "no", '\n',
+        'adapter_global_alpha_init: ', str(args.adapter_global_alpha_init), '\n',
+        'freeze_decoder_bn_stats: ', "yes" if args.freeze_decoder_bn_stats else "no", '\n',
         'adapter_lr_factor: ', str(args.adapter_lr_factor), '\n',
         'latent_lambda: ', str(args.latent_lambda), '\n',
         'latent_cosine_lambda: ', str(args.latent_cosine_lambda), '\n',

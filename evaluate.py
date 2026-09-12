@@ -111,15 +111,26 @@ if __name__ == '__main__':
         adapter_transformer_dropout=args.adapter_transformer_dropout,
         adapter_use_global_alpha=args.adapter_use_global_alpha,
         adapter_global_alpha_init=args.adapter_global_alpha_init,
+        use_prior_completion=args.use_prior_completion,
+        completion_hidden_channels=args.completion_hidden_channels,
+        completion_geometry_hidden_channels=args.completion_geometry_hidden_channels,
+        completion_geometry_channels=args.completion_geometry_channels,
+        completion_residual_scale=args.completion_residual_scale,
+        completion_use_checkpoint=False,
     )
     if args.resume_name is not None:
         model_path = os.path.join(checkpoints_path, 'ckpt_history', 'ckpt_'+args.resume_name)
         data = torch.load(model_path, map_location=device)
-        if args.adapter_use_global_alpha:
+        if args.adapter_use_global_alpha or args.use_prior_completion:
             incompatible = G_render.load_state_dict(data['G_render'], strict=False)
+            allowed_missing = {"adapter.global_alpha"}
             invalid_missing = [
                 key for key in incompatible.missing_keys
-                if key != "adapter.global_alpha"
+                if key not in allowed_missing
+                and not (
+                    args.use_prior_completion
+                    and key.startswith("prior_completion.")
+                )
             ]
             if invalid_missing or incompatible.unexpected_keys:
                 raise RuntimeError(
@@ -131,6 +142,16 @@ if __name__ == '__main__':
                     "Checkpoint predates global alpha; initialized adapter.global_alpha "
                     f"to {args.adapter_global_alpha_init}.",
                     stacklevel=2,
+                )
+            missing_completion = [
+                key for key in incompatible.missing_keys
+                if key.startswith("prior_completion.")
+            ]
+            if missing_completion:
+                raise RuntimeError(
+                    "The selected checkpoint has no trained ContinuousPriorCompletion "
+                    "weights. Evaluate it without --use_prior_completion, or select a "
+                    "checkpoint saved after completion training."
                 )
         else:
             G_render.load_state_dict(data['G_render'])

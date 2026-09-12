@@ -50,6 +50,12 @@ if __name__ == '__main__':
         adapter_transformer_dropout=args.adapter_transformer_dropout,
         adapter_use_global_alpha=args.adapter_use_global_alpha,
         adapter_global_alpha_init=args.adapter_global_alpha_init,
+        use_prior_completion=args.use_prior_completion,
+        completion_hidden_channels=args.completion_hidden_channels,
+        completion_geometry_hidden_channels=args.completion_geometry_hidden_channels,
+        completion_geometry_channels=args.completion_geometry_channels,
+        completion_residual_scale=args.completion_residual_scale,
+        completion_use_checkpoint=not args.disable_completion_checkpoint,
     )
     if args.pretrained_backbone is not None and not args.resume:
         backbone_checkpoint = torch.load(args.pretrained_backbone, map_location="cpu")

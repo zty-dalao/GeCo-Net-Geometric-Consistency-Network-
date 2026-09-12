@@ -42,6 +42,12 @@ class trainer():
         self.latent_lambda = args.latent_lambda
         self.latent_cosine_lambda = args.latent_cosine_lambda
         self.latent_stat_lambda = args.latent_stat_lambda
+        self.use_prior_completion = bool(args.use_prior_completion)
+        self.completion_phase_epochs = (
+            args.completion_phase_epochs if self.use_prior_completion else 0
+        )
+        self.completion_lr_factor = args.completion_lr_factor
+        self.completion_residual_lambda = args.completion_residual_lambda
         self.freeze_decoder_bn_stats = args.freeze_decoder_bn_stats
         self.bone_lambda = args.bone_lambda
         self.soft_mask_lambda = args.soft_mask_lambda
@@ -66,7 +72,8 @@ class trainer():
         self.phase_c_epochs = args.phase_c_epochs
         self.phase_c_hold_epochs = args.phase_c_hold_epochs
         self.phase_d_epochs = self.num_epochs - sum((
-            self.phase_a_epochs, self.phase_b_epochs, self.phase_c_epochs,
+            self.phase_a_epochs, self.phase_b_epochs,
+            self.completion_phase_epochs, self.phase_c_epochs,
             self.phase_c_hold_epochs,
         ))
         self.use_four_phase = bool(
@@ -89,6 +96,7 @@ class trainer():
             self.latent_lambda, self.latent_cosine_lambda, self.latent_stat_lambda,
             self.bone_lambda, self.soft_mask_lambda, self.ssim_lambda,
             self.adapter_lr_factor, self.decoder_lr_factor,
+            self.completion_lr_factor, self.completion_residual_lambda,
             self.phase_b_encoder_lr_factor, self.phase_b_aggregator_lr_factor,
             self.phase_c_backbone_lr_factor, self.phase_c_aggregator_lr_factor,
             self.phase_d_backbone_lr_factor, self.phase_d_aggregator_lr_factor,
@@ -100,10 +108,11 @@ class trainer():
         if min(
             self.phase_a_epochs,
             self.phase_b_epochs,
+            self.completion_phase_epochs,
             self.phase_c_epochs,
             self.phase_c_hold_epochs,
         ) < 0:
-            raise ValueError("Phase A/B/C and Phase-C hold epoch counts must be non-negative")
+            raise ValueError("Phase A/B/Completion/C and Phase-C hold epoch counts must be non-negative")
         if self.use_four_phase and self.phase_d_epochs <= 0:
             raise ValueError("--epochs must leave at least one epoch for Phase D")
         if not (0 <= self.phase_c_latent_end_factor <= self.phase_b_latent_end_factor <= 1):
@@ -118,6 +127,10 @@ class trainer():
             raise ValueError(
                 "Phase A freezes Encoder/Aggregator, so four-phase training requires "
                 "--pretrained_backbone (or --resume)."
+            )
+        if self.use_prior_completion and not self.use_four_phase:
+            raise ValueError(
+                "Continuous prior completion requires pretrained-decoder four-phase training"
             )
 
         # render 
@@ -245,6 +258,11 @@ class trainer():
             {"params": encoder_late_parameters, "lr": init_lr, "name": "encoder_late"},
             {"params": aggregator_parameters, "lr": init_lr, "name": "aggregator"},
             {"params": list(self.G_render.adapter.parameters()), "lr": init_lr, "name": "adapter"},
+            {
+                "params": list(self.G_render.prior_completion.parameters()),
+                "lr": init_lr,
+                "name": "prior_completion",
+            },
             {"params": decoder_core_parameters, "lr": init_lr, "name": "decoder_core"},
             {"params": decoder_up_low_parameters, "lr": init_lr, "name": "decoder_up_low"},
             {"params": decoder_up_high_parameters, "lr": init_lr, "name": "decoder_up_high"},
@@ -281,8 +299,13 @@ class trainer():
         if epoch < self.phase_a_epochs + self.phase_b_epochs:
             return 2
         if epoch < (
+            self.phase_a_epochs + self.phase_b_epochs + self.completion_phase_epochs
+        ):
+            return 5
+        if epoch < (
             self.phase_a_epochs
             + self.phase_b_epochs
+            + self.completion_phase_epochs
             + self.phase_c_epochs
             + self.phase_c_hold_epochs
         ):
@@ -300,7 +323,13 @@ class trainer():
         decay = self.lr_gamma ** (epoch // max(1, self.lr_step_size))
         stage = self._training_stage(epoch)
         if group_name == "adapter":
+            if stage == 5:
+                return 0.0
             return decay * self.adapter_lr_factor
+        if group_name == "prior_completion":
+            if not self.use_prior_completion or stage in (1, 2):
+                return 0.0
+            return decay * self.completion_lr_factor
         if stage == 0:
             return decay
         if stage == 1:
@@ -351,6 +380,7 @@ class trainer():
         if self.phase_c_epochs <= 0:
             return 4
         phase_start = self.phase_a_epochs + self.phase_b_epochs
+        phase_start += self.completion_phase_epochs
         progress = (epoch - phase_start) / max(1, self.phase_c_epochs)
         return min(4, max(1, int(progress * 4) + 1))
 
@@ -366,7 +396,10 @@ class trainer():
                 1.0, self.phase_b_latent_end_factor, index, self.phase_b_epochs,
             )
         elif stage == 3:
-            index = epoch - self.phase_a_epochs - self.phase_b_epochs
+            index = (
+                epoch - self.phase_a_epochs - self.phase_b_epochs
+                - self.completion_phase_epochs
+            )
             factor = self._linear_value(
                 self.phase_b_latent_end_factor,
                 self.phase_c_latent_end_factor,
@@ -378,6 +411,7 @@ class trainer():
                 epoch
                 - self.phase_a_epochs
                 - self.phase_b_epochs
+                - self.completion_phase_epochs
                 - self.phase_c_epochs
                 - self.phase_c_hold_epochs
             )
@@ -398,6 +432,47 @@ class trainer():
             return self.prior_anchor_lambda * self.phase_d_anchor_factor
         return 0.0
 
+    def _completion_weight(self, epoch):
+        """Decay the pCT residual teacher while keeping completion trainable."""
+        if not self.use_prior_completion or self.completion_residual_lambda <= 0:
+            return 0.0
+        stage = self._training_stage(epoch)
+        if stage == 0:
+            return self.completion_residual_lambda
+        if stage in (1, 2):
+            return 0.0
+        if stage == 5:
+            return self.completion_residual_lambda
+        if stage == 3:
+            index = (
+                epoch - self.phase_a_epochs - self.phase_b_epochs
+                - self.completion_phase_epochs
+            )
+            factor = self._linear_value(
+                1.0,
+                self.phase_c_latent_end_factor,
+                index,
+                self.phase_c_epochs,
+            )
+            return self.completion_residual_lambda * factor
+        if stage == 4:
+            index = (
+                epoch
+                - self.phase_a_epochs
+                - self.phase_b_epochs
+                - self.completion_phase_epochs
+                - self.phase_c_epochs
+                - self.phase_c_hold_epochs
+            )
+            factor = self._linear_value(
+                self.phase_c_latent_end_factor,
+                0.0,
+                index,
+                self.phase_d_epochs,
+            )
+            return self.completion_residual_lambda * factor
+        return 0.0
+
     @staticmethod
     def _set_trainable(module, trainable):
         for parameter in module.parameters():
@@ -414,6 +489,9 @@ class trainer():
                     epoch, group.get("name", "backbone")
                 )
         self.G_render.train()
+        self.G_render.completion_enabled = (
+            self.use_prior_completion and stage in (0, 3, 4, 5)
+        )
 
         if stage == 0:
             self._set_trainable(self.G_render, True)
@@ -437,7 +515,14 @@ class trainer():
         self.G_render.decoder.eval()
         self.G_render.adapter.train(self.adapter_lr_factor > 0)
 
-        if stage == 2:
+        if stage == 5:
+            self._set_trainable(self.G_render.adapter, False)
+            self._set_trainable(
+                self.G_render.prior_completion, self.completion_lr_factor > 0,
+            )
+            self.G_render.adapter.eval()
+            self.G_render.prior_completion.train(self.completion_lr_factor > 0)
+        elif stage == 2:
             for layer in (self.G_render.encoder.model.layer3, self.G_render.encoder.model.layer4):
                 self._set_trainable(layer, self.phase_b_encoder_lr_factor > 0)
                 layer.train(self.phase_b_encoder_lr_factor > 0)
@@ -445,6 +530,10 @@ class trainer():
                 self._set_trainable(aggregator, self.phase_b_aggregator_lr_factor > 0)
                 aggregator.train(self.phase_b_aggregator_lr_factor > 0)
         elif stage in (3, 4):
+            self._set_trainable(
+                self.G_render.prior_completion, self.completion_lr_factor > 0,
+            )
+            self.G_render.prior_completion.train(self.completion_lr_factor > 0)
             backbone_factor = (
                 self.phase_c_backbone_lr_factor if stage == 3
                 else self.phase_d_backbone_lr_factor
@@ -640,7 +729,7 @@ class trainer():
                 "latent_normalized_smooth_l1_raw": zero,
                 "prior_anchor_raw": zero,
                 "prior_anchor_loss": zero,
-            }, 0.0, 0.0
+            }, 0.0, 0.0, None
         prior_latent = self._make_prior_latent(volume_gt)
         if prior_latent is None:
             raise RuntimeError("Four-phase training requires a loaded prior encoder")
@@ -669,7 +758,43 @@ class trainer():
             "prior_anchor_raw": anchor_raw,
             "prior_anchor_loss": anchor_loss,
         }
-        return values, latent_weight, anchor_weight
+        return values, latent_weight, anchor_weight, prior_latent
+
+    def _completion_losses(self, prior_latent, epoch):
+        """Supervise only the missing residual; never expose pCT to model input."""
+        reference = self.G_render.last_aligned_latent
+        prediction = self.G_render.last_completion_residual
+        zero = reference.new_zeros(())
+        values = {
+            "completion_residual_raw": zero,
+            "completion_residual_loss": zero,
+            "completion_pred_abs_mean": zero,
+            "completion_target_abs_mean": zero,
+        }
+        if (
+            not self.use_prior_completion
+            or not self.G_render.completion_enabled
+            or prior_latent is None
+        ):
+            return values
+        if prediction is None:
+            raise RuntimeError("Completion is enabled but produced no residual")
+        if reference.shape != prior_latent.shape or prediction.shape != reference.shape:
+            raise RuntimeError(
+                "Completion latent shape mismatch: aligned="
+                f"{tuple(reference.shape)}, residual={tuple(prediction.shape)}, "
+                f"prior={tuple(prior_latent.shape)}"
+            )
+        # Detaching both sides keeps this auxiliary target from pulling the
+        # observation path. Reconstruction/reprojection losses still jointly
+        # fine-tune that path in later phases.
+        target = (prior_latent - reference).detach()
+        raw = F.smooth_l1_loss(prediction, target)
+        values["completion_residual_raw"] = raw
+        values["completion_residual_loss"] = raw * self._completion_weight(epoch)
+        values["completion_pred_abs_mean"] = prediction.detach().abs().mean()
+        values["completion_target_abs_mean"] = target.abs().mean()
+        return values
         
     def save_ckpt(self, epoch):
         data = {
@@ -702,9 +827,12 @@ class trainer():
                     incompatible = self.G_render.load_state_dict(
                         data['G_render'], strict=False
                     )
+                    allowed_missing_prefixes = ["adapter."]
+                    if self.use_prior_completion:
+                        allowed_missing_prefixes.append("prior_completion.")
                     invalid_missing = [
                         key for key in incompatible.missing_keys
-                        if not key.startswith("adapter.")
+                        if not key.startswith(tuple(allowed_missing_prefixes))
                     ]
                     if invalid_missing or incompatible.unexpected_keys:
                         raise RuntimeError(
@@ -713,7 +841,16 @@ class trainer():
                             f"{incompatible.unexpected_keys}"
                         )
                     if incompatible.missing_keys:
-                        if incompatible.missing_keys == ["adapter.global_alpha"]:
+                        if all(
+                            key.startswith("prior_completion.")
+                            for key in incompatible.missing_keys
+                        ):
+                            warnings.warn(
+                                "The resumed checkpoint predates ContinuousPriorCompletion; "
+                                "completion weights keep their identity-residual initialization.",
+                                stacklevel=2,
+                            )
+                        elif incompatible.missing_keys == ["adapter.global_alpha"]:
                             warnings.warn(
                                 "The resumed checkpoint predates Transformer global alpha; "
                                 "adapter.global_alpha keeps its configured initial value.",
@@ -803,12 +940,16 @@ class trainer():
         else:
             loss_dict['gd1_loss'] = 0.0
 
-        latent_values, latent_weight, anchor_weight = self._latent_and_anchor_losses(
+        latent_values, latent_weight, anchor_weight, prior_latent = self._latent_and_anchor_losses(
             projection_latent, volume_gt, epoch,
         )
         for key, value in latent_values.items():
             loss_dict[key] = round(value.item(), 8)
         G_loss += latent_values["latent_loss"] + latent_values["prior_anchor_loss"]
+        completion_values = self._completion_losses(prior_latent, epoch)
+        for key, value in completion_values.items():
+            loss_dict[key] = round(value.item(), 8)
+        G_loss += completion_values["completion_residual_loss"]
 
         optional_losses = self._regional_and_ssim_losses(volume_predict, volume_gt)
         for key, value in optional_losses.items():
@@ -856,12 +997,19 @@ class trainer():
             'latent_mean_l1_raw', 'latent_std_l1_raw',
             'latent_normalized_smooth_l1_raw',
             'prior_anchor_raw', 'prior_anchor_loss',
+            'completion_residual_raw', 'completion_residual_loss',
+            'completion_pred_abs_mean', 'completion_target_abs_mean',
             'bone_gt_mask_raw', 'bone_gt_mask_loss',
             'soft_mask_raw', 'soft_mask_loss', 'ssim_loss_raw', 'ssim_loss',
         ):
             self.writer.add_scalar(f"step/train_{key}", loss_dict[key], self.global_step)
         self.writer.add_scalar("step/latent_weight", latent_weight, self.global_step)
         self.writer.add_scalar("step/prior_anchor_weight", anchor_weight, self.global_step)
+        self.writer.add_scalar(
+            "step/completion_residual_weight",
+            self._completion_weight(epoch),
+            self.global_step,
+        )
         self.writer.add_scalar("step/training_stage", self.current_stage, self.global_step)
         global_alpha = getattr(self.G_render.adapter, "global_alpha", None)
         if global_alpha is not None:
@@ -949,12 +1097,16 @@ class trainer():
         else:
             loss_dict['gd1_loss'] = 0.0
 
-        latent_values, _, _ = self._latent_and_anchor_losses(
+        latent_values, _, _, prior_latent = self._latent_and_anchor_losses(
             projection_latent, volume_gt, epoch,
         )
         for key, value in latent_values.items():
             loss_dict[key] = round(value.item(), 8)
         total_loss += latent_values["latent_loss"] + latent_values["prior_anchor_loss"]
+        completion_values = self._completion_losses(prior_latent, epoch)
+        for key, value in completion_values.items():
+            loss_dict[key] = round(value.item(), 8)
+        total_loss += completion_values["completion_residual_loss"]
 
         optional_losses = self._regional_and_ssim_losses(volume_predict, volume_gt)
         for key, value in optional_losses.items():
@@ -1057,6 +1209,10 @@ class trainer():
             'latent_normalized_smooth_l1_raw',
             'prior_anchor_raw',
             'prior_anchor_loss',
+            'completion_residual_raw',
+            'completion_residual_loss',
+            'completion_pred_abs_mean',
+            'completion_target_abs_mean',
             'bone_gt_mask_raw',
             'bone_gt_mask_loss',
             'soft_mask_raw',

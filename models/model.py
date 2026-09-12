@@ -6,6 +6,7 @@ from models.SRGAN import generator
 from models.aggregator import adafusor, localfusor, meanfusor, varfusor
 from submodel.adapter import LatentAdapter
 from submodel.adapter_with_transformer import TransformerLatentAdapter
+from submodel.continuous_prior_completion import ContinuousPriorCompletion
 
 # Main Model
 class model(nn.Module):
@@ -24,6 +25,12 @@ class model(nn.Module):
         adapter_transformer_dropout=0.1,
         adapter_use_global_alpha=False,
         adapter_global_alpha_init=0.0,
+        use_prior_completion=False,
+        completion_hidden_channels=16,
+        completion_geometry_hidden_channels=32,
+        completion_geometry_channels=64,
+        completion_residual_scale=1.0,
+        completion_use_checkpoint=True,
     ):
         super(model, self).__init__()
         self.device = device
@@ -66,6 +73,22 @@ class model(nn.Module):
                 )
         else:
             self.adapter = nn.Identity()
+
+        self.use_prior_completion = bool(use_prior_completion)
+        self.completion_enabled = self.use_prior_completion
+        if self.use_prior_completion:
+            self.prior_completion = ContinuousPriorCompletion(
+                channels=int(self.decoder_conf.inplanes),
+                hidden_channels=int(completion_hidden_channels),
+                geometry_hidden_channels=int(completion_geometry_hidden_channels),
+                geometry_channels=int(completion_geometry_channels),
+                residual_scale=float(completion_residual_scale),
+                use_checkpoint=bool(completion_use_checkpoint),
+            ).to(device)
+        else:
+            self.prior_completion = nn.Identity()
+        self.last_aligned_latent = None
+        self.last_completion_residual = None
 
         self.aggregator_conf = model_conf['aggregator']
         if self.fusion == 'local':
@@ -114,6 +137,16 @@ class model(nn.Module):
     def forward(self, xyz_world, return_latent=False):
         latent = self.query_volume_latent(xyz_world)
         latent = self.adapter(latent)
+        self.last_aligned_latent = latent
+        if self.use_prior_completion and self.completion_enabled:
+            latent, residual = self.prior_completion(
+                latent,
+                self.encoder.poses,
+                return_residual=True,
+            )
+            self.last_completion_residual = residual
+        else:
+            self.last_completion_residual = None
         outputs = self.decoder(latent)[0,0,:,:,:].transpose(0,2)    # align with ITK-SNAP display format。 这里实际上是拿到针对单个点的，从其在不同视角上的对应点的特征向量，这些特征向量是在维度上进行拼接的
                                                                     # ④ self.decoder(outputs)：★ decoder 3D 上采样 [1, 1, X, Y, Z]
                                                                     # [0,0,:,:,:].transpose(0,2)：⑤ 对齐 ITK-SNAP 显示格式

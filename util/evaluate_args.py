@@ -49,6 +49,15 @@ def parse_args():
         action="store_true",
         help="Accepted for command parity; evaluation already uses eval mode",
     )
+    parser.add_argument(
+        "--use_prior_completion",
+        action="store_true",
+        help="Build the geometry-conditioned continuous completion used by the checkpoint",
+    )
+    parser.add_argument("--completion_hidden_channels", type=int, default=16)
+    parser.add_argument("--completion_geometry_hidden_channels", type=int, default=32)
+    parser.add_argument("--completion_geometry_channels", type=int, default=64)
+    parser.add_argument("--completion_residual_scale", type=float, default=1.0)
     parser.add_argument("--dataname", type=str, default='test', help="evaluate dataname") 
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
     parser.add_argument(
@@ -84,6 +93,16 @@ def parse_args():
         parser.error("bone_lambda, soft_mask_lambda, and ssim_lambda must be non-negative")
     if args.soft_window_high <= args.soft_window_low:
         parser.error("soft_window_high must be greater than soft_window_low")
+    if args.use_prior_completion and not args.use_adapter:
+        parser.error("--use_prior_completion requires --use_adapter")
+    if min(
+        args.completion_hidden_channels,
+        args.completion_geometry_hidden_channels,
+        args.completion_geometry_channels,
+    ) <= 0:
+        parser.error("completion channel counts must be positive")
+    if args.completion_residual_scale < 0:
+        parser.error("completion_residual_scale must be non-negative")
 
     conf = ConfigFactory.parse_file(args.conf)
     if args.train_scale!=0:
@@ -125,6 +144,11 @@ def parse_args():
         'adapter_use_global_alpha: ', "yes" if args.adapter_use_global_alpha else "no", '\n',
         'adapter_global_alpha_init: ', str(args.adapter_global_alpha_init), '\n',
         'freeze_decoder_bn_stats: ', "yes" if args.freeze_decoder_bn_stats else "no", '\n',
+        'use_prior_completion: ', "yes" if args.use_prior_completion else "no", '\n',
+        'completion_hidden_channels: ', str(args.completion_hidden_channels), '\n',
+        'completion_geometry_hidden_channels: ', str(args.completion_geometry_hidden_channels), '\n',
+        'completion_geometry_channels: ', str(args.completion_geometry_channels), '\n',
+        'completion_residual_scale: ', str(args.completion_residual_scale), '\n',
     ])
 
     exp_state = ''.join(exp_state_list)

@@ -89,6 +89,38 @@ def parse_args():
         help="Adapter learning-rate multiplier relative to the base learning rate",
     )
     parser.add_argument(
+        "--use_prior_completion",
+        action="store_true",
+        help="Enable geometry-conditioned continuous latent residual completion",
+    )
+    parser.add_argument("--completion_hidden_channels", type=int, default=16)
+    parser.add_argument("--completion_geometry_hidden_channels", type=int, default=32)
+    parser.add_argument("--completion_geometry_channels", type=int, default=64)
+    parser.add_argument("--completion_residual_scale", type=float, default=1.0)
+    parser.add_argument(
+        "--completion_phase_epochs",
+        type=int,
+        default=40,
+        help="Completion-only epochs inserted between Phase B and Phase C",
+    )
+    parser.add_argument(
+        "--completion_lr_factor",
+        type=float,
+        default=1.0,
+        help="Completion learning-rate multiplier relative to the base learning rate",
+    )
+    parser.add_argument(
+        "--completion_residual_lambda",
+        type=float,
+        default=0.1,
+        help="Weight for SmoothL1(delta_pred, stopgrad(z_prior-z_aligned))",
+    )
+    parser.add_argument(
+        "--disable_completion_checkpoint",
+        action="store_true",
+        help="Disable activation recomputation inside completion residual blocks",
+    )
+    parser.add_argument(
         "--latent_lambda",
         type=float,
         default=0.0,
@@ -197,6 +229,28 @@ def parse_args():
 
     args = parser.parse_args()
 
+    if args.use_prior_completion and not args.use_adapter:
+        parser.error("--use_prior_completion requires --use_adapter")
+    if args.use_prior_completion and not args.pretrained_decoder:
+        parser.error(
+            "--use_prior_completion requires --pretrained_decoder to construct "
+            "the pCT latent teacher (also when resuming)"
+        )
+    if min(
+        args.completion_hidden_channels,
+        args.completion_geometry_hidden_channels,
+        args.completion_geometry_channels,
+    ) <= 0:
+        parser.error("completion channel counts must be positive")
+    if args.completion_phase_epochs < 0:
+        parser.error("--completion_phase_epochs must be non-negative")
+    if min(
+        args.completion_lr_factor,
+        args.completion_residual_lambda,
+        args.completion_residual_scale,
+    ) < 0:
+        parser.error("completion LR/loss factors must be non-negative")
+
     conf = ConfigFactory.parse_file(args.conf)
     if args.train_scale!=0:
         conf.put("model.SRGAN.generator.scale", args.train_scale)   # 如果命令行指定了 --train_scale（且不为0），则覆盖配置文件里生成器（Generator）的上采样倍数
@@ -242,13 +296,25 @@ def parse_args():
         'adapter_global_alpha_init: ', str(args.adapter_global_alpha_init), '\n',
         'freeze_decoder_bn_stats: ', "yes" if args.freeze_decoder_bn_stats else "no", '\n',
         'adapter_lr_factor: ', str(args.adapter_lr_factor), '\n',
+        'use_prior_completion: ', "yes" if args.use_prior_completion else "no", '\n',
+        'completion_hidden_channels: ', str(args.completion_hidden_channels), '\n',
+        'completion_geometry_hidden_channels: ', str(args.completion_geometry_hidden_channels), '\n',
+        'completion_geometry_channels: ', str(args.completion_geometry_channels), '\n',
+        'completion_residual_scale: ', str(args.completion_residual_scale), '\n',
+        'completion_phase_epochs: ', str(args.completion_phase_epochs), '\n',
+        'completion_lr_factor: ', str(args.completion_lr_factor), '\n',
+        'completion_residual_lambda: ', str(args.completion_residual_lambda), '\n',
+        'completion_checkpoint: ', "no" if args.disable_completion_checkpoint else "yes", '\n',
         'latent_lambda: ', str(args.latent_lambda), '\n',
         'latent_cosine_lambda: ', str(args.latent_cosine_lambda), '\n',
         'latent_stat_lambda: ', str(args.latent_stat_lambda), '\n',
-        'phase_epochs[A,B,C-progressive,C-hold,D]: [', str(args.phase_a_epochs), ', ',
-        str(args.phase_b_epochs), ', ', str(args.phase_c_epochs), ', ',
+        'phase_epochs[A,B,Completion,C-progressive,C-hold,D]: [', str(args.phase_a_epochs), ', ',
+        str(args.phase_b_epochs), ', ',
+        str(args.completion_phase_epochs if args.use_prior_completion else 0), ', ',
+        str(args.phase_c_epochs), ', ',
         str(args.phase_c_hold_epochs), ', ',
         str(max(0, args.epochs - args.phase_a_epochs - args.phase_b_epochs
+                - (args.completion_phase_epochs if args.use_prior_completion else 0)
                 - args.phase_c_epochs - args.phase_c_hold_epochs)), ']\n',
         'phase_b_encoder_lr_factor: ', str(args.phase_b_encoder_lr_factor), '\n',
         'phase_b_aggregator_lr_factor: ', str(args.phase_b_aggregator_lr_factor), '\n',

@@ -76,8 +76,18 @@ class trainer():
             self.completion_phase_epochs, self.phase_c_epochs,
             self.phase_c_hold_epochs,
         ))
+        self.transfer_schedule = args.transfer_schedule
+        self.legacy_stage1_epochs = args.legacy_stage1_epochs
+        self.legacy_stage2_epochs = args.legacy_stage2_epochs
+        self.legacy_stage3_backbone_lr_factor = (
+            args.legacy_stage3_backbone_lr_factor
+        )
+        # Adapter and Completion are independent optional bridges.  Either one
+        # can activate prior-transfer training; enabling both composes them.
         self.use_four_phase = bool(
-            self.is_train and args.pretrained_decoder and args.use_adapter
+            self.is_train
+            and args.pretrained_decoder
+            and (args.use_adapter or args.use_prior_completion)
         )
         self.decoder_lr_factor = args.decoder_lr_factor
         self.adapter_lr_factor = args.adapter_lr_factor
@@ -113,7 +123,11 @@ class trainer():
             self.phase_c_hold_epochs,
         ) < 0:
             raise ValueError("Phase A/B/Completion/C and Phase-C hold epoch counts must be non-negative")
-        if self.use_four_phase and self.phase_d_epochs <= 0:
+        if (
+            self.use_four_phase
+            and self.transfer_schedule == "four_phase"
+            and self.phase_d_epochs <= 0
+        ):
             raise ValueError("--epochs must leave at least one epoch for Phase D")
         if not (0 <= self.phase_c_latent_end_factor <= self.phase_b_latent_end_factor <= 1):
             raise ValueError("Require 0 <= phase_c_latent_end_factor <= phase_b_latent_end_factor <= 1")
@@ -294,6 +308,12 @@ class trainer():
     def _training_stage(self, epoch):
         if not self.use_four_phase:
             return 0
+        if self.transfer_schedule == "legacy_three_stage":
+            if epoch < self.legacy_stage1_epochs:
+                return 6
+            if epoch < self.legacy_stage1_epochs + self.legacy_stage2_epochs:
+                return 7
+            return 8
         if epoch < self.phase_a_epochs:
             return 1
         if epoch < self.phase_a_epochs + self.phase_b_epochs:
@@ -327,7 +347,7 @@ class trainer():
                 return 0.0
             return decay * self.adapter_lr_factor
         if group_name == "prior_completion":
-            if not self.use_prior_completion or stage in (1, 2):
+            if not self.use_prior_completion:
                 return 0.0
             return decay * self.completion_lr_factor
         if stage == 0:
@@ -366,6 +386,28 @@ class trainer():
                 "decoder_core": self.decoder_core_lr_factor,
             }
             return decay * factors.get(group_name, 0.0)
+        if stage == 6:
+            return 0.0
+        if stage == 7:
+            factors = {
+                "encoder_early": 1.0,
+                "encoder_late": 1.0,
+                "aggregator": 1.0,
+                "decoder_out": self.decoder_lr_factor,
+                "decoder_up_high": self.decoder_lr_factor,
+                "decoder_up_low": self.decoder_lr_factor,
+                "decoder_core": self.decoder_lr_factor,
+            }
+            return decay * factors.get(group_name, 0.0)
+        if stage == 8:
+            factors = {
+                "encoder_early": self.legacy_stage3_backbone_lr_factor,
+                "encoder_late": self.legacy_stage3_backbone_lr_factor,
+                "aggregator": self.legacy_stage3_backbone_lr_factor,
+                "decoder_out": self.decoder_lr_factor,
+                "decoder_up_high": self.decoder_lr_factor,
+            }
+            return decay * factors.get(group_name, 0.0)
         return 0.0
 
     @staticmethod
@@ -388,6 +430,16 @@ class trainer():
         if self.prior_stem is None or self.latent_lambda <= 0:
             return 0.0
         stage = self._training_stage(epoch)
+        if stage == 6:
+            return self.latent_lambda
+        if stage == 7:
+            index = epoch - self.legacy_stage1_epochs
+            factor = self._linear_value(
+                0.5, 0.0, index, self.legacy_stage2_epochs,
+            )
+            return self.latent_lambda * factor
+        if stage == 8:
+            return 0.0
         if stage == 1:
             return self.latent_lambda
         if stage == 2:
@@ -437,6 +489,16 @@ class trainer():
         if not self.use_prior_completion or self.completion_residual_lambda <= 0:
             return 0.0
         stage = self._training_stage(epoch)
+        if stage == 6:
+            return self.completion_residual_lambda
+        if stage == 7:
+            index = epoch - self.legacy_stage1_epochs
+            factor = self._linear_value(
+                1.0, 0.0, index, self.legacy_stage2_epochs,
+            )
+            return self.completion_residual_lambda * factor
+        if stage == 8:
+            return 0.0
         if stage == 0:
             return self.completion_residual_lambda
         if stage in (1, 2):
@@ -489,9 +551,9 @@ class trainer():
                     epoch, group.get("name", "backbone")
                 )
         self.G_render.train()
-        self.G_render.completion_enabled = (
-            self.use_prior_completion and stage in (0, 3, 4, 5)
-        )
+        # Architecture participation is independent of phase trainability.
+        # A zero-initialized/frozen Completion is still an exact identity.
+        self.G_render.completion_enabled = self.use_prior_completion
 
         if stage == 0:
             self._set_trainable(self.G_render, True)
@@ -507,13 +569,18 @@ class trainer():
         # belonging to the current phase. This also prevents stale requires_grad
         # flags when crossing a phase boundary or resuming a checkpoint.
         self._set_trainable(self.G_render, False)
-        self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
+        self._set_trainable(
+            self.G_render.adapter,
+            self.G_render.use_adapter and self.adapter_lr_factor > 0,
+        )
         self.G_render.encoder.eval()
         aggregator = getattr(self.G_render, "aggregator", None)
         if aggregator is not None:
             aggregator.eval()
         self.G_render.decoder.eval()
-        self.G_render.adapter.train(self.adapter_lr_factor > 0)
+        self.G_render.adapter.train(
+            self.G_render.use_adapter and self.adapter_lr_factor > 0
+        )
 
         if stage == 5:
             self._set_trainable(self.G_render.adapter, False)
@@ -523,12 +590,27 @@ class trainer():
             self.G_render.adapter.eval()
             self.G_render.prior_completion.train(self.completion_lr_factor > 0)
         elif stage == 2:
+            self._set_trainable(
+                self.G_render.prior_completion,
+                self.use_prior_completion and self.completion_lr_factor > 0,
+            )
+            self.G_render.prior_completion.train(
+                self.use_prior_completion and self.completion_lr_factor > 0
+            )
             for layer in (self.G_render.encoder.model.layer3, self.G_render.encoder.model.layer4):
                 self._set_trainable(layer, self.phase_b_encoder_lr_factor > 0)
                 layer.train(self.phase_b_encoder_lr_factor > 0)
             if aggregator is not None:
                 self._set_trainable(aggregator, self.phase_b_aggregator_lr_factor > 0)
                 aggregator.train(self.phase_b_aggregator_lr_factor > 0)
+        elif stage == 1:
+            self._set_trainable(
+                self.G_render.prior_completion,
+                self.use_prior_completion and self.completion_lr_factor > 0,
+            )
+            self.G_render.prior_completion.train(
+                self.use_prior_completion and self.completion_lr_factor > 0
+            )
         elif stage in (3, 4):
             self._set_trainable(
                 self.G_render.prior_completion, self.completion_lr_factor > 0,
@@ -563,6 +645,43 @@ class trainer():
             for module in decoder_modules:
                 self._set_trainable(module, True)
                 module.train()
+        elif stage in (6, 7, 8):
+            # Legacy three-stage schedule.  Stage 1 trains only the enabled
+            # bridge(s); Stage 2 jointly tunes the whole reconstruction path;
+            # Stage 3 retains only the last upsampling/output decoder blocks.
+            self._set_trainable(
+                self.G_render.prior_completion,
+                self.use_prior_completion and self.completion_lr_factor > 0,
+            )
+            self.G_render.prior_completion.train(
+                self.use_prior_completion and self.completion_lr_factor > 0
+            )
+
+            if stage in (7, 8):
+                backbone_factor = (
+                    1.0 if stage == 7
+                    else self.legacy_stage3_backbone_lr_factor
+                )
+                self._set_trainable(self.G_render.encoder, backbone_factor > 0)
+                self.G_render.encoder.train(backbone_factor > 0)
+                if aggregator is not None:
+                    self._set_trainable(aggregator, backbone_factor > 0)
+                    aggregator.train(backbone_factor > 0)
+
+                decoder_modules = [
+                    self.G_render.decoder.out_blk,
+                    self.G_render.decoder.up_blk_list[-1],
+                ]
+                if stage == 7:
+                    decoder_modules.extend((
+                        self.G_render.decoder.in_blk,
+                        self.G_render.decoder.res_blk_list,
+                        self.G_render.decoder.res_blk_last,
+                    ))
+                    decoder_modules.extend(self.G_render.decoder.up_blk_list[:-1])
+                for module in decoder_modules:
+                    self._set_trainable(module, True)
+                    module.train()
 
         if self.prior_stem is not None:
             self.prior_stem.eval()

@@ -83,6 +83,22 @@ def parse_args():
         help="Keep Decoder BatchNorm running mean/variance fixed while training",
     )
     parser.add_argument(
+        "--transfer_schedule",
+        choices=("four_phase", "legacy_three_stage"),
+        default="four_phase",
+        help=(
+            "Prior-transfer schedule. legacy_three_stage reproduces the old "
+            "adapter experiment's freeze/joint/terminal-refinement sequence."
+        ),
+    )
+    parser.add_argument("--legacy_stage1_epochs", type=int, default=20)
+    parser.add_argument("--legacy_stage2_epochs", type=int, default=100)
+    parser.add_argument(
+        "--legacy_stage3_backbone_lr_factor",
+        type=float,
+        default=0.01,
+    )
+    parser.add_argument(
         "--adapter_lr_factor",
         type=float,
         default=1.0,
@@ -229,8 +245,6 @@ def parse_args():
 
     args = parser.parse_args()
 
-    if args.use_prior_completion and not args.use_adapter:
-        parser.error("--use_prior_completion requires --use_adapter")
     if args.use_prior_completion and not args.pretrained_decoder:
         parser.error(
             "--use_prior_completion requires --pretrained_decoder to construct "
@@ -244,6 +258,18 @@ def parse_args():
         parser.error("completion channel counts must be positive")
     if args.completion_phase_epochs < 0:
         parser.error("--completion_phase_epochs must be non-negative")
+    if min(args.legacy_stage1_epochs, args.legacy_stage2_epochs) < 0:
+        parser.error("legacy three-stage epoch counts must be non-negative")
+    if (
+        args.transfer_schedule == "legacy_three_stage"
+        and args.legacy_stage1_epochs + args.legacy_stage2_epochs >= args.epochs
+    ):
+        parser.error(
+            "legacy_stage1_epochs + legacy_stage2_epochs must leave at least "
+            "one epoch for legacy Stage 3"
+        )
+    if args.legacy_stage3_backbone_lr_factor < 0:
+        parser.error("--legacy_stage3_backbone_lr_factor must be non-negative")
     if min(
         args.completion_lr_factor,
         args.completion_residual_lambda,
@@ -295,6 +321,11 @@ def parse_args():
         'adapter_use_global_alpha: ', "yes" if args.adapter_use_global_alpha else "no", '\n',
         'adapter_global_alpha_init: ', str(args.adapter_global_alpha_init), '\n',
         'freeze_decoder_bn_stats: ', "yes" if args.freeze_decoder_bn_stats else "no", '\n',
+        'transfer_schedule: ', str(args.transfer_schedule), '\n',
+        'legacy_stage1_epochs: ', str(args.legacy_stage1_epochs), '\n',
+        'legacy_stage2_epochs: ', str(args.legacy_stage2_epochs), '\n',
+        'legacy_stage3_backbone_lr_factor: ',
+        str(args.legacy_stage3_backbone_lr_factor), '\n',
         'adapter_lr_factor: ', str(args.adapter_lr_factor), '\n',
         'use_prior_completion: ', "yes" if args.use_prior_completion else "no", '\n',
         'completion_hidden_channels: ', str(args.completion_hidden_channels), '\n',

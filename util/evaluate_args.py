@@ -93,8 +93,6 @@ def parse_args():
         parser.error("bone_lambda, soft_mask_lambda, and ssim_lambda must be non-negative")
     if args.soft_window_high <= args.soft_window_low:
         parser.error("soft_window_high must be greater than soft_window_low")
-    if args.use_prior_completion and not args.use_adapter:
-        parser.error("--use_prior_completion requires --use_adapter")
     if min(
         args.completion_hidden_channels,
         args.completion_geometry_hidden_channels,

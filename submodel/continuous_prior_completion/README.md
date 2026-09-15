@@ -455,3 +455,67 @@ D = epochs
 如果某阶段提前稳定，可以停止实验，修改对应的阶段epoch参数后从合适的checkpoint
 重新开始或续训。不要只为了凑足预设轮数继续单模块拟合，否则A阶段可能让Adapter承担
 过多补全，P阶段也可能开始记忆训练病例的 `C-A` 残差。
+
+## 12. Completion替代Adapter的旧三阶段消融
+
+设置 `--transfer_schedule legacy_three_stage`，并且只传
+`--use_prior_completion`、不传 `--use_adapter`，得到：
+
+```text
+Aggregator -> Continuous Prior Completion -> Decoder
+```
+
+三个阶段为：
+
+| 阶段 | 默认范围 | 训练模块 | Decoder状态 |
+|---|---:|---|---|
+| Stage 1 | 0～19 | Completion | 完全冻结 |
+| Stage 2 | 20～119 | Encoder、Aggregator、Completion、完整Decoder | 完整Decoder以低学习率联合训练 |
+| Stage 3 | 120～199 | Completion、低学习率Encoder/Aggregator、Decoder末端 | 只解冻最后上采样块和输出块 |
+
+```bash
+python train.py \
+  --name dental_prior_completion_three_stage \
+  --datadir ./dataset/dental/syn_data \
+  --datatype dental \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 \
+  --end 360 \
+  --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 200 \
+  --pretrained_backbone train/checkpoints/dental_prior_transfer_after_refine/ckpt_history/ckpt_199 \
+  --pretrained_decoder submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_best_val.pt \
+  --prior_encoder_type shallow \
+  --use_prior_completion \
+  --completion_hidden_channels 16 \
+  --completion_geometry_hidden_channels 32 \
+  --completion_geometry_channels 64 \
+  --completion_residual_scale 1.0 \
+  --completion_lr_factor 1.0 \
+  --completion_residual_lambda 0.1 \
+  --transfer_schedule legacy_three_stage \
+  --legacy_stage1_epochs 20 \
+  --legacy_stage2_epochs 100 \
+  --legacy_stage3_backbone_lr_factor 0.01 \
+  --decoder_lr_factor 0.1 \
+  --prior_anchor_lambda 0 \
+  --latent_lambda 0.1 \
+  --latent_cosine_lambda 0.1 \
+  --latent_stat_lambda 0 \
+  --query_chunk_size 25000 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 \
+  --soft_window_high 240 \
+  --ssim_lambda 0.01 \
+  --device cuda:0
+```
+
+`legacy_stage1_epochs + legacy_stage2_epochs` 之后的全部epoch自动属于Stage 3。
+上面的总epoch为200，因此三个阶段分别为20、100、80轮。为了做严格的结构消融，建议
+再运行一个只把 `--completion_residual_lambda` 改为 `0` 的对照；这样可以区分提升来自
+Completion网络结构，还是来自额外的pCT残差教师。

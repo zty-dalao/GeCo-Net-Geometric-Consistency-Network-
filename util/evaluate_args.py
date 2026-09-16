@@ -59,7 +59,7 @@ def parse_args():
     parser.add_argument("--completion_geometry_channels", type=int, default=64)
     parser.add_argument("--completion_residual_scale", type=float, default=1.0)
     parser.add_argument("--dataname", type=str, default='test', help="evaluate dataname") 
-    parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
+    parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | thorax | Walnuts")
     parser.add_argument(
         "--bone_lambda", type=float, default=0.0,
         help="Report weighted GT-defined bone-mask L1 (0 disables this loss report)",

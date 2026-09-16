@@ -3,6 +3,8 @@
 numpy==1.24.4
 pyhocon==0.3.61
 SimpleITK==2.4.0
+pydicom==2.4.5
+matplotlib>=3.7
 skimage==0.0
 torch==2.7.1+cu128
 torchvision==0.22.1+cu128

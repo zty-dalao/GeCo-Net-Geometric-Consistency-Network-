@@ -166,6 +166,10 @@ class trainer():
             self.clamp_min = conf.get_float('data.spine.clamp_min')
             self.clamp_max = conf.get_float('data.spine.clamp_max')
             self.divide = 10
+        if args.datatype == 'thorax':
+            self.clamp_min = conf.get_float('data.thorax.clamp_min')
+            self.clamp_max = conf.get_float('data.thorax.clamp_max')
+            self.divide = 10
         if args.datatype == 'Walnuts':
             self.clamp_min = conf.get_float('data.Walnuts.clamp_min')
             self.clamp_max = conf.get_float('data.Walnuts.clamp_max')

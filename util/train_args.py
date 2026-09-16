@@ -24,7 +24,7 @@ def parse_args():
     parser.add_argument("--is_train", action="store_true", help="Training or visualization")
     parser.add_argument("--resume", "-r", action="store_true", help="continue training")
     parser.add_argument("--resume_name", type=str, default=None, help='resume which trained net for continue training')
-    parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
+    parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | thorax | Walnuts")
     parser.add_argument("--gd1_lambda", type=float, default=1.0, help='weight for gradient loss')
     parser.add_argument("--mse_lambda_2d", type=float, default=0.01, help='weight for projection loss')  
     parser.add_argument(

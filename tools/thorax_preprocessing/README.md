@@ -88,7 +88,7 @@ SAD/SID 和 XIM 属性名。新增病例后应先执行一次。
 `dataset/thorax/projection/<case>/Acquisitions/<id>/Proj_*.xim`，完成空气校正、曝光归一化、
 负对数变换、均匀角度选择和探测器重采样，然后将结果写入
 `dataset/thorax/syn_data/<case>/proj.nii.gz`；同一命令也会生成训练所需的体数据和
-`transforms.json`。使用CBCT作为临时GT的完整命令为：
+`transforms.json`。以下命令使用CBCT作为临时GT，只适合无配准时检查投影转换和数据链路：
 
 ```powershell
 conda activate deeplearning
@@ -109,6 +109,12 @@ python -m tools.thorax_preprocessing.prepare_thorax `
   --gt-source registered-ct `
   --registered-ct-mu dataset/thorax/registration/current/registered_ct_mu.nii.gz
 ```
+
+`--gt-source` 只选择 `gt_volume.nii.gz` 的来源，不参与XIM投影像素的生成。在其余投影参数相同
+时，`cbct` 与 `registered-ct` 两种模式得到的 `proj.nii.gz` 相同；不同的是GT内容以及
+`transforms.json` 中的体积网格。当前病例的原生CBCT深度为118，不能被模型的4倍上采样尺度整除，
+因此正式训练推荐 `registered-ct`：它使用配准后的pCT作为GT，并采用
+248×248×120、2 mm等方、各维可被4整除的标准网格。
 
 脚本会跳过空的投影病例目录，以及缺少 `Scan.xml`、`Acquisitions/<id>` 或
 `Proj_*.xim` 的不完整投影目录；跳过信息以 `[SKIP]` 开头。若整个 `image` 目录没有DICOM，
@@ -286,3 +292,15 @@ GT重新生成网络输入投影。训练器仍会对网络预测的三维体积
 
 转换完成后仍应至少人工检查三个方向的 CT/CBCT 切片、若干角度的 `proj.nii.gz`，并用几何做一次
 投影/反投影可视化。尤其在把 CT 设为 GT 前，必须确认解剖位置、左右/头脚方向和等中心一致。
+
+### `Zero-valued spacing` 排查
+
+若SimpleITK报告 `Refusing to change spacing ... to [..., ..., 0]`，说明DICOM序列的相邻
+`ImagePositionPatient` 中存在重复位置，或位置标签缺失，旧版读取逻辑因此算出了0 mm层间距。
+当前读取器会按 `SOPInstanceUID` 和物理切片位置去重，只使用非零位置差估算spacing，并在位置
+不可用时依次回退到 `SpacingBetweenSlices`、`SliceThickness`。可先运行检查命令确认CT和CBCT的
+切片数及z-spacing均大于0：
+
+```bash
+python -m tools.thorax_preprocessing.inspect_thorax --root dataset/thorax
+```

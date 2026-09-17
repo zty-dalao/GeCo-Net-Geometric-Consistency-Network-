@@ -12,7 +12,9 @@ import argparse
 import json
 from pathlib import Path
 import shutil
-from typing import Iterable
+import sys
+import time
+from typing import Callable, Iterable
 
 import matplotlib
 
@@ -76,6 +78,7 @@ def coarse_longitudinal_search(
     initial: sitk.Euler3DTransform,
     search_range_mm: float,
     step_mm: float,
+    progress: Callable[[int, int, float, float], None] | None = None,
 ) -> tuple[sitk.Euler3DTransform, list[dict[str, float]]]:
     """Choose a robust initial superior/inferior translation using mutual information."""
     factor = 4
@@ -96,7 +99,8 @@ def coarse_longitudinal_search(
     records: list[dict[str, float]] = []
     best_metric = float("inf")
     best = sitk.Euler3DTransform(initial)
-    for offset in offsets:
+    total = len(offsets)
+    for index, offset in enumerate(offsets, start=1):
         candidate = sitk.Euler3DTransform(initial)
         candidate.SetTranslation(tuple(base_translation + offset * slice_normal))
         metric.SetInitialTransform(candidate)
@@ -108,6 +112,8 @@ def coarse_longitudinal_search(
         if np.isfinite(value) and value < best_metric:
             best_metric = value
             best = candidate
+        if progress is not None:
+            progress(index, total, float(offset), value)
     if not np.isfinite(best_metric):
         raise RuntimeError("All coarse longitudinal registration candidates failed")
     return best, records
@@ -144,6 +150,35 @@ def configure_registration(
     return method
 
 
+def attach_iteration_logger(
+    method: sitk.ImageRegistrationMethod,
+    label: str,
+    log: Callable[[str], None] | None,
+    report_every_seconds: float = 20.0,
+) -> None:
+    """Report optimizer progress so a long registration never looks frozen.
+
+    ``GradientDescentLineSearch`` fires the iteration event once per line-search
+    trial, so the optimizer's own counter is not a reliable progress numerator;
+    report elapsed time and the current metric instead.
+    """
+    if log is None:
+        return
+    state = {"started": time.perf_counter(), "reported": time.perf_counter()}
+
+    def on_iteration() -> None:
+        now = time.perf_counter()
+        if now - state["reported"] < report_every_seconds:
+            return
+        state["reported"] = now
+        log(
+            f"    {label} 进行中 {now - state['started']:.0f}s"
+            f"  metric={method.GetMetricValue():.5f}"
+        )
+
+    method.AddCommand(sitk.sitkIterationEvent, on_iteration)
+
+
 def register_rigid(
     fixed: sitk.Image,
     moving: sitk.Image,
@@ -152,10 +187,12 @@ def register_rigid(
     initial: sitk.Euler3DTransform,
     sampling: float,
     iterations: int,
+    log: Callable[[str], None] | None = None,
 ) -> tuple[sitk.Euler3DTransform, dict[str, object]]:
     method = configure_registration(fixed_mask, moving_mask, sampling, iterations, 1.0)
     transform = sitk.Euler3DTransform(initial)
     method.SetInitialTransform(transform, inPlace=True)
+    attach_iteration_logger(method, "刚性", log)
     method.Execute(fixed, moving)
     return transform, {
         "metric": float(method.GetMetricValue()),
@@ -172,6 +209,7 @@ def register_affine(
     rigid: sitk.Euler3DTransform,
     sampling: float,
     iterations: int,
+    log: Callable[[str], None] | None = None,
 ) -> tuple[sitk.AffineTransform, dict[str, object]]:
     transform = sitk.AffineTransform(3)
     transform.SetCenter(rigid.GetCenter())
@@ -179,6 +217,7 @@ def register_affine(
     transform.SetTranslation(rigid.GetTranslation())
     method = configure_registration(fixed_mask, moving_mask, sampling, iterations, 0.25)
     method.SetInitialTransform(transform, inPlace=True)
+    attach_iteration_logger(method, "仿射", log)
     method.Execute(fixed, moving)
     return transform, {
         "metric": float(method.GetMetricValue()),
@@ -298,87 +337,99 @@ def save_qa_figure(fixed_hu: np.ndarray, registered_hu: np.ndarray, path: Path) 
     plt.close(figure)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path("dataset/thorax"))
-    parser.add_argument("--output", type=Path, default=Path("dataset/thorax/registration/current"))
-    parser.add_argument("--ct-series-uid", default=None)
-    parser.add_argument("--cbct-series-uid", default=None)
-    parser.add_argument("--sampling", type=float, default=0.15)
-    parser.add_argument("--rigid-iterations", type=int, default=180)
-    parser.add_argument("--affine-iterations", type=int, default=140)
-    parser.add_argument("--coarse-z-range-mm", type=float, default=240.0)
-    parser.add_argument("--coarse-z-step-mm", type=float, default=30.0)
-    parser.add_argument("--rigid-only", action="store_true")
-    parser.add_argument(
-        "--target-spacing-mm",
-        type=float,
-        default=2.0,
-        help="Isotropic spacing of the saved training volumes",
-    )
-    parser.add_argument(
-        "--size-multiple",
-        type=int,
-        default=4,
-        help="Round each output dimension up to this model-compatible multiple",
-    )
-    parser.add_argument("--overwrite", action="store_true")
-    args = parser.parse_args()
-    if not 0 < args.sampling <= 1:
-        parser.error("--sampling must be in (0, 1]")
-    if args.target_spacing_mm <= 0 or args.size_multiple <= 0:
-        parser.error("--target-spacing-mm and --size-multiple must be positive")
+def discover_case_dirs(image_root: Path) -> list[Path]:
+    """Return every patient folder below ``image`` that contains DICOM files."""
+    if not image_root.is_dir():
+        print(f"[SKIP] Image root does not exist: {image_root}", flush=True)
+        return []
+    cases: list[Path] = []
+    for path in sorted(image_root.iterdir()):
+        if not path.is_dir():
+            continue
+        if any(path.rglob("*.dcm")):
+            cases.append(path)
+        else:
+            print(f"[SKIP] No DICOM below {path}", flush=True)
+    return cases
 
-    image_root = args.root / "image"
-    all_series = discover_series(image_root)
-    if not all_series:
-        print(f"[SKIP] No CT DICOM slices found below {image_root}")
-        return
+
+def projection_case_names(root: Path) -> list[str]:
+    """List ``projection/<case>`` folder names for the closing cross-check."""
+    projection_root = root / "projection"
+    if not projection_root.is_dir():
+        return []
+    return sorted(path.name for path in projection_root.iterdir() if path.is_dir())
+
+
+def register_case(
+    case_dir: Path,
+    output_root: Path,
+    args: argparse.Namespace,
+    log: Callable[[str], None],
+) -> dict[str, object]:
+    """Register one patient folder; report problems as a record instead of raising."""
+    name = case_dir.name
+    started = time.perf_counter()
+    case_series = discover_series(case_dir)
+    if not case_series:
+        return {"case": name, "status": "skipped", "reason": f"{case_dir} 下没有 CT DICOM 文件"}
     try:
-        ct_series = select_series(all_series, "ct", args.ct_series_uid)
+        ct_series = select_series(case_series, "ct", args.ct_series_uid)
     except ValueError as error:
-        print(f"[SKIP] Missing or empty CT data below {image_root}: {error}")
-        return
+        return {"case": name, "status": "skipped", "reason": f"缺少计划 CT 序列（{error}）"}
     try:
-        cbct_series = select_series(all_series, "cbct", args.cbct_series_uid)
+        cbct_series = select_series(case_series, "cbct", args.cbct_series_uid)
     except ValueError as error:
-        print(f"[SKIP] Missing or empty CBCT data below {image_root}: {error}")
-        return
+        return {"case": name, "status": "skipped", "reason": f"缺少 Varian CBCT 序列（{error}）"}
     if not ct_series.paths:
-        print(f"[SKIP] Empty CT DICOM series below {image_root}")
-        return
+        return {"case": name, "status": "skipped", "reason": "计划 CT 序列为空"}
     if not cbct_series.paths:
-        print(f"[SKIP] Empty CBCT DICOM series below {image_root}")
-        return
+        return {"case": name, "status": "skipped", "reason": "CBCT 序列为空"}
 
-    # Read both inputs successfully before an existing output may be replaced.
+    output = output_root / name
+    if output.resolve().parent != output_root.resolve():
+        return {"case": name, "status": "failed", "reason": f"不安全的输出路径: {output}"}
+    if output.exists():
+        if not args.overwrite:
+            return {
+                "case": name,
+                "status": "existing",
+                "reason": f"输出已存在: {output}（加 --overwrite 可覆盖）",
+            }
+        marker = output / ".thorax_registration_output"
+        known_output = (output / "registration_metrics.json").exists() and (
+            output / "registered_ct_hu.nii.gz"
+        ).exists()
+        if not marker.exists() and not known_output:
+            return {"case": name, "status": "failed", "reason": f"拒绝覆盖无法识别的目录: {output}"}
+        shutil.rmtree(output)
+    output.mkdir(parents=True)
+    (output / ".thorax_registration_output").write_text(
+        "Generated by tools.thorax_preprocessing.registration\n", encoding="utf-8"
+    )
+
+    log(f"计划 CT   : {len(ct_series.paths)} 层 {ct_series.columns}x{ct_series.rows}")
+    log(f"Varian CBCT: {len(cbct_series.paths)} 层 {cbct_series.columns}x{cbct_series.rows}")
+    log("读取 DICOM 体数据 ...")
     ct_hu, ct_image = load_hu(ct_series.paths)
     cbct_hu, cbct_image = load_hu(cbct_series.paths)
     del ct_hu, cbct_hu
 
-    if args.output.exists():
-        if not args.overwrite:
-            raise FileExistsError(f"Output exists: {args.output}; pass --overwrite to replace it")
-        if args.output.resolve() in (args.root.resolve(), args.root.resolve().parent):
-            raise ValueError(f"Unsafe output path: {args.output}")
-        marker = args.output / ".thorax_registration_output"
-        known_output = (args.output / "registration_metrics.json").exists() and (
-            args.output / "registered_ct_hu.nii.gz"
-        ).exists()
-        if not marker.exists() and not known_output:
-            raise ValueError(f"Refusing to overwrite an unrecognized directory: {args.output}")
-        shutil.rmtree(args.output)
-    args.output.mkdir(parents=True)
-    (args.output / ".thorax_registration_output").write_text(
-        "Generated by tools.thorax_preprocessing.registration\n", encoding="utf-8"
-    )
-
+    log("提取身体掩膜 ...")
     fixed = preprocess_hu(cbct_image)
     moving = preprocess_hu(ct_image)
     fixed_mask = largest_body_mask(cbct_image)
     moving_mask = largest_body_mask(ct_image)
 
+    log(
+        f"轴向粗搜索 z 偏移（±{args.coarse_z_range_mm:g} mm，步长 {args.coarse_z_step_mm:g} mm）..."
+    )
     center_initial = geometry_initializer(fixed, moving)
+
+    def coarse_progress(index: int, count: int, offset: float, value: float) -> None:
+        if index % 5 == 0 or index == count:
+            log(f"    粗搜索 {index}/{count}: z={offset:+.0f} mm metric={value:.5f}")
+
     coarse_initial, coarse_records = coarse_longitudinal_search(
         fixed,
         moving,
@@ -387,12 +438,10 @@ def main() -> None:
         center_initial,
         args.coarse_z_range_mm,
         args.coarse_z_step_mm,
+        progress=coarse_progress,
     )
-    print(
-        "Coarse z offset:",
-        min(coarse_records, key=lambda item: item["metric"])["offset_mm"],
-        "mm",
-    )
+    log(f"  选定 z 偏移 {min(coarse_records, key=lambda item: item['metric'])['offset_mm']:+.0f} mm")
+    log(f"刚性配准（{args.rigid_iterations} 次迭代，采样率 {args.sampling:g}）...")
     rigid, rigid_stats = register_rigid(
         fixed,
         moving,
@@ -401,12 +450,14 @@ def main() -> None:
         coarse_initial,
         args.sampling,
         args.rigid_iterations,
+        log=log,
     )
-    print("Rigid:", rigid_stats["metric"], rigid_stats["stop_condition"])
+    log(f"  刚性完成 metric={rigid_stats['metric']:.5f} 迭代={rigid_stats['iterations']}")
     if args.rigid_only:
         final_transform: sitk.Transform = rigid
         affine_stats = None
     else:
+        log(f"仿射配准（{args.affine_iterations} 次迭代）...")
         affine, affine_stats = register_affine(
             fixed,
             moving,
@@ -415,10 +466,12 @@ def main() -> None:
             rigid,
             args.sampling,
             args.affine_iterations,
+            log=log,
         )
         final_transform = affine
-        print("Affine:", affine_stats["metric"], affine_stats["stop_condition"])
+        log(f"  仿射完成 metric={affine_stats['metric']:.5f} 迭代={affine_stats['iterations']}")
 
+    log(f"重采样到 {args.target_spacing_mm:g} mm 训练网格并写盘 ...")
     training_reference = centered_training_reference(
         cbct_image, args.target_spacing_mm, args.size_multiple
     )
@@ -489,20 +542,215 @@ def main() -> None:
         "ct_to_cbct.tfm": "forward physical transform from moving CT points -> fixed CBCT points",
     }
 
-    sitk.WriteImage(standardized_cbct, str(args.output / "fixed_cbct_hu.nii.gz"), useCompression=True)
-    sitk.WriteImage(registered, str(args.output / "registered_ct_hu.nii.gz"), useCompression=True)
+    metrics["case"] = name
+    sitk.WriteImage(standardized_cbct, str(output / "fixed_cbct_hu.nii.gz"), useCompression=True)
+    sitk.WriteImage(registered, str(output / "registered_ct_hu.nii.gz"), useCompression=True)
     registered_mu = image_with_array(hu_to_mu(registered_hu), registered)
-    sitk.WriteImage(registered_mu, str(args.output / "registered_ct_mu.nii.gz"), useCompression=True)
-    sitk.WriteTransform(final_transform, str(args.output / "resample_cbct_to_ct.tfm"))
-    sitk.WriteTransform(final_transform.GetInverse(), str(args.output / "ct_to_cbct.tfm"))
-    (args.output / "registration_metrics.json").write_text(
+    sitk.WriteImage(registered_mu, str(output / "registered_ct_mu.nii.gz"), useCompression=True)
+    sitk.WriteTransform(final_transform, str(output / "resample_cbct_to_ct.tfm"))
+    sitk.WriteTransform(final_transform.GetInverse(), str(output / "ct_to_cbct.tfm"))
+    (output / "registration_metrics.json").write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    save_qa_figure(fixed_hu, registered_hu, args.output / "registration_qa.png")
-    print(json.dumps({key: value for key, value in metrics.items() if key in (
-        "body_mask_dice", "initial_nmi", "registered_nmi", "registered_correlation", "quality_pass"
-    )}, indent=2))
-    print("Wrote registration outputs to", args.output)
+    save_qa_figure(fixed_hu, registered_hu, output / "registration_qa.png")
+
+    elapsed = time.perf_counter() - started
+    log(
+        f"完成 {elapsed:.1f}s  Dice={metrics['body_mask_dice']:.3f} "
+        f"NMI {metrics['initial_nmi']:.3f}->{metrics['registered_nmi']:.3f} "
+        f"相关={metrics['registered_correlation']:.3f} "
+        f"质控={'通过' if metrics['quality_pass'] else '不通过(' + ','.join(quality_flags) + ')'}"
+    )
+    return {
+        "case": name,
+        "status": "ok",
+        "output": str(output),
+        "quality_pass": bool(metrics["quality_pass"]),
+        "quality_flags": quality_flags,
+        "body_mask_dice": metrics["body_mask_dice"],
+        "initial_nmi": metrics["initial_nmi"],
+        "registered_nmi": metrics["registered_nmi"],
+        "registered_correlation": metrics["registered_correlation"],
+        "elapsed_s": round(elapsed, 1),
+    }
+
+
+def main() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        # Long batches must never die on an unencodable progress character.
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path("dataset/thorax"))
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("dataset/thorax/registration/current"),
+        help="Parent folder holding one output sub-folder per patient",
+    )
+    parser.add_argument(
+        "--ct-series-uid",
+        default=None,
+        help="Force a planning-CT series UID; only meaningful for a single patient folder",
+    )
+    parser.add_argument(
+        "--cbct-series-uid",
+        default=None,
+        help="Force a CBCT series UID; only meaningful for a single patient folder",
+    )
+    parser.add_argument("--sampling", type=float, default=0.15)
+    parser.add_argument("--rigid-iterations", type=int, default=180)
+    parser.add_argument("--affine-iterations", type=int, default=140)
+    parser.add_argument("--coarse-z-range-mm", type=float, default=240.0)
+    parser.add_argument("--coarse-z-step-mm", type=float, default=30.0)
+    parser.add_argument("--rigid-only", action="store_true")
+    parser.add_argument(
+        "--target-spacing-mm",
+        type=float,
+        default=2.0,
+        help="Isotropic spacing of the saved training volumes",
+    )
+    parser.add_argument(
+        "--size-multiple",
+        type=int,
+        default=4,
+        help="Round each output dimension up to this model-compatible multiple",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Process only the first N patient folders (0 = all); handy for a smoke test",
+    )
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+    if not 0 < args.sampling <= 1:
+        parser.error("--sampling must be in (0, 1]")
+    if args.target_spacing_mm <= 0 or args.size_multiple <= 0:
+        parser.error("--target-spacing-mm and --size-multiple must be positive")
+    if args.limit < 0:
+        parser.error("--limit must be >= 0")
+
+    image_root = args.root / "image"
+    all_case_dirs = discover_case_dirs(image_root)
+    if not all_case_dirs:
+        print(f"[SKIP] No patient folders with DICOM found below {image_root}", flush=True)
+        return
+    discovered = len(all_case_dirs)
+    case_dirs = all_case_dirs[: args.limit] if args.limit else all_case_dirs
+    if args.output.resolve() in (args.root.resolve(), image_root.resolve()):
+        parser.error(f"--output must not be the dataset root or its image folder: {args.output}")
+    if args.ct_series_uid or args.cbct_series_uid:
+        print(
+            "警告: 指定了 --ct-series-uid/--cbct-series-uid，会对每个病例套用同一 UID，"
+            "只有单病例目录下才有意义",
+            flush=True,
+        )
+
+    args.output.mkdir(parents=True, exist_ok=True)
+    total = len(case_dirs)
+    if total < discovered:
+        print(
+            f"在 {image_root} 下发现 {discovered} 个病人文件夹，"
+            f"--limit {args.limit} 只处理前 {total} 个",
+            flush=True,
+        )
+    else:
+        print(f"在 {image_root} 下发现 {total} 个病人文件夹", flush=True)
+    print(f"输出目录 {args.output}", flush=True)
+    batch_started = time.perf_counter()
+    results: list[dict[str, object]] = []
+    for index, case_dir in enumerate(case_dirs, start=1):
+        print(f"\n[{index}/{total}] {case_dir.name}", flush=True)
+
+        def log(message: str) -> None:
+            print(f"    {message}", flush=True)
+
+        try:
+            result = register_case(case_dir, args.output, args, log)
+        except Exception as error:  # noqa: BLE001 - 批处理必须继续处理后续病人
+            result = {
+                "case": case_dir.name,
+                "status": "failed",
+                "reason": f"{type(error).__name__}: {error}",
+            }
+            print(f"    [FAIL] {result['reason']}", flush=True)
+        if result["status"] == "skipped":
+            print(f"    [SKIP] {result['reason']}", flush=True)
+        elif result["status"] == "existing":
+            print(f"    [SKIP] {result['reason']}", flush=True)
+        results.append(result)
+
+    succeeded = [item for item in results if item["status"] == "ok"]
+    skipped = [item for item in results if item["status"] == "skipped"]
+    existing = [item for item in results if item["status"] == "existing"]
+    failed = [item for item in results if item["status"] == "failed"]
+    quality_failed = [item for item in succeeded if not item["quality_pass"]]
+    image_names = {path.name for path in all_case_dirs}
+    projection_names = projection_case_names(args.root)
+    missing_image = [name for name in projection_names if name not in image_names]
+    missing_projection = [name for name in sorted(image_names) if name not in set(projection_names)]
+    elapsed_minutes = (time.perf_counter() - batch_started) / 60.0
+
+    summary = {
+        "image_root": str(image_root),
+        "output_root": str(args.output),
+        "discovered_cases": discovered,
+        "total_cases": total,
+        "succeeded": len(succeeded),
+        "skipped_missing_data": len(skipped),
+        "skipped_existing_output": len(existing),
+        "failed": len(failed),
+        "quality_failed": [item["case"] for item in quality_failed],
+        "skipped_detail": {item["case"]: item["reason"] for item in skipped},
+        "failed_detail": {item["case"]: item["reason"] for item in failed},
+        "projection_without_image_case": missing_image,
+        "image_case_without_projection": missing_projection,
+        "elapsed_minutes": round(elapsed_minutes, 2),
+        "cases": results,
+    }
+    (args.output / "batch_summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    print("\n" + "=" * 72, flush=True)
+    print(
+        f"批处理结束：共 {total} 例，成功 {len(succeeded)}，"
+        f"缺数据跳过 {len(skipped)}，已有输出跳过 {len(existing)}，失败 {len(failed)}；"
+        f"总用时 {elapsed_minutes:.1f} 分钟",
+        flush=True,
+    )
+    if skipped:
+        print("\n缺失数据（缺 CT / 缺 CBCT / 无 DICOM）的文件夹：", flush=True)
+        for item in skipped:
+            print(f"  - {item['case']}: {item['reason']}", flush=True)
+    if failed:
+        print("\n处理失败的文件夹：", flush=True)
+        for item in failed:
+            print(f"  - {item['case']}: {item['reason']}", flush=True)
+    if existing:
+        print("\n已有输出被跳过的文件夹（需 --overwrite 才会重跑）：", flush=True)
+        for item in existing:
+            print(f"  - {item['case']}", flush=True)
+    if quality_failed:
+        print("\n配准质控不通过（建议人工复核）：", flush=True)
+        for item in quality_failed:
+            print(
+                f"  - {item['case']}: {','.join(item['quality_flags'])}"
+                f" (Dice={item['body_mask_dice']:.3f}, 相关={item['registered_correlation']:.3f})",
+                flush=True,
+            )
+    if missing_image:
+        print("\nprojection 有目录但 image 缺文件夹：", flush=True)
+        for name in missing_image:
+            print(f"  - {name}", flush=True)
+    if not missing_image:
+        print("\nprojection 与 image 的病人文件夹一一对应，无缺失。", flush=True)
+    if missing_projection:
+        print("\nimage 有文件夹但 projection 缺失（无法生成投影，后续不能训练）：", flush=True)
+        for name in missing_projection:
+            print(f"  - {name}", flush=True)
+    print(f"\n完整汇总 JSON: {args.output / 'batch_summary.json'}", flush=True)
 
 
 if __name__ == "__main__":

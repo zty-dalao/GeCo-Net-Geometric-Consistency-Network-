@@ -173,10 +173,38 @@ python -m tools.thorax_preprocessing.registration `
   --size-multiple 4
 ```
 
-配准开始前会先检查并实际读取CT和CBCT。`image` 目录为空、CT序列为空或CBCT序列为空时，
-程序打印 `[SKIP]` 后正常结束，不创建新输出，也不会因使用 `--overwrite` 而删除已有配准结果。
+### 批处理：`image` 下一个文件夹就是一个病人
 
-输出包括：
+`registration.py` 会遍历 `--root/image` 下的**每一个病人文件夹**，逐个独立完成配准：
+
+1. 只在当前病人文件夹内按 `SeriesInstanceUID` 分组识别序列，因此不会把甲病人的 CT 和乙病人的
+   CBCT 配到一起；扫描量也从整棵树降到单个病例的几百个文件，几秒即可完成；
+2. 每完成一个阶段都打印进度（读取体数据、身体掩膜、轴向粗搜索、刚性、仿射、重采样写盘），
+   长阶段每 20 秒报告一次当前 metric，因此不会出现"看着像卡死"的情况；
+3. 单个病人出错（缺 CT、缺 CBCT、读取失败、配准异常）只记录该病人并继续处理后面的病人；
+4. `--output` 现在是**父目录**，每个病人写入自己的子目录 `--output/<病人文件夹名>/`；
+5. 结束时打印汇总，并明确列出：
+   - 缺失数据的文件夹（无 DICOM、缺计划 CT 序列、缺 Varian CBCT 序列）；
+   - 处理失败的文件夹及原因；
+   - 已有输出被跳过的文件夹（未加 `--overwrite` 时不会重跑，也不会中断批处理）；
+   - 配准质控不通过的文件夹及其触发项；
+   - `projection` 有目录但 `image` 缺文件夹，以及 `image` 有文件夹但 `projection` 缺失。
+6. 同一份汇总同时写入 `--output/batch_summary.json`，便于脚本筛选。
+
+正式跑 184 个病人前，建议先用 `--limit 2` 只跑前两个病人验证参数与耗时：
+
+```powershell
+python -m tools.thorax_preprocessing.registration `
+  --root dataset/thorax `
+  --output dataset/thorax/registration/current `
+  --target-spacing-mm 2 --size-multiple 4 `
+  --limit 2
+```
+
+`--ct-series-uid` / `--cbct-series-uid` 只在需要强制指定单个病人的序列时使用；批处理下会对每个
+病人套用同一 UID，通常不是你想要的，因此程序会打印警告。
+
+每个病人目录中的输出包括：
 
 - `registered_ct_hu.nii.gz`：CBCT 网格上的配准 CT；
 - `registered_ct_mu.nii.gz`：可用于训练的非负线性衰减系数；
@@ -192,17 +220,23 @@ python -m tools.thorax_preprocessing.registration `
 248×248×120、2×2×2 mm。批处理时应根据质控阈值筛出少量失败病例人工复核，
 不能仅凭优化器收敛就认定配准正确。测试参数或只需要刚性变换时可加 `--rigid-only`。
 
-配准质控通过后，可直接把重采样后的 CT 选为训练 GT：
+配准质控通过后，可直接把重采样后的 CT 选为训练 GT。注意注册结果的路径现在多了一层病人文件夹：
 
 ```powershell
 python -m tools.thorax_preprocessing.prepare_thorax `
-  --root dataset/thorax `
+  --root <单病人的数据根> `
   --output dataset/thorax/syn_data `
   --gt-source registered-ct `
-  --registered-ct-mu dataset/thorax/registration/current/registered_ct_mu.nii.gz `
+  --registered-ct-mu dataset/thorax/registration/current/<病人文件夹名>/registered_ct_mu.nii.gz `
   --projection-bin 1 `
   --projection-resolution 256
 ```
+
+> ⚠️ `prepare_thorax.py` 目前**仍是单病例入口**：它对 `root/image` 只做一次
+> `discover_series` + `select_series`，然后把同一份 CBCT/CT 写进 `projection` 下的每个病例目录。
+> 在含 184 个病人的 `dataset/thorax` 上直接运行会跨病人错配，也不会按病人读取各自的
+> `registration/current/<病人>/registered_ct_mu.nii.gz`。它需要与 `registration.py` 一样改成
+> 按病人文件夹批处理；在那之前，请只对单个病人的数据根运行它。
 
 准备脚本会验证注册 CT 与 CBCT 的方向及物理中心兼容，并把 CBCT 重采样到注册 CT 的标准训练
 网格，避免把未重采样的 CT 错当作投影监督标签。

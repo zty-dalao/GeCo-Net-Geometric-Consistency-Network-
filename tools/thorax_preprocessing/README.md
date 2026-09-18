@@ -221,6 +221,33 @@ python -m tools.thorax_preprocessing.registration \
 确认MOMENTS是否产生了明显的x/y/z初始平移。呼吸导致的肺、膈肌局部形变不能由重心初始化、刚性
 或仿射完全消除；本参数改善的是全局初值，仍必须结合 `registration_qa.png` 和质控指标检查结果。
 
+### 提高z方向粗搜索采样数
+
+原配置 `--coarse-z-range-mm 240 --coarse-z-step-mm 30` 会产生17个候选位置。新增
+`--coarse-z-samples` 后，可以直接指定在完整 `[-range,+range]` 上均匀评估的候选数量；该参数非0
+时优先于 `--coarse-z-step-mm`。对全部病例使用MOMENTS初始化和356点z搜索：
+
+```bash
+python -m tools.thorax_preprocessing.registration \
+  --root dataset/thorax \
+  --output dataset/thorax/registration/moments_z356 \
+  --initializer moments \
+  --coarse-z-range-mm 240 \
+  --coarse-z-samples 356 \
+  --target-spacing-mm 2 \
+  --size-multiple 4
+```
+
+在±240 mm范围内，356点对应约1.352 mm间隔。建议先用 `--limit 2` 测试时间和结果；356点的
+粗搜索评估次数约为原17点的20.9倍。粗搜索是有限网格枚举，不是梯度迭代，没有可靠的“收敛后
+停止”条件；按扫描顺序提前停止可能漏掉尚未评估的更优位置，所以没有启用不安全的early stop。
+后续刚性和仿射优化器本身已有收敛检测，会在满足条件时提前停止。
+
+更密的z搜索只提高z初值分辨率，不能解决残余x/y错位、旋转、呼吸形变或掩膜/FOV差异。Dice是
+身体轮廓质控指标，也不是粗搜索直接优化的目标；粗搜索仍使用跨模态更稳健的互信息。因此采样从
+17增至356不保证每例Dice都上升。应保留旧输出，以 `batch_summary.json`、逐例指标和QA叠加图
+比较后再选择训练GT，不能只按Dice单一排序。
+
 ### 批处理：`image` 下一个文件夹就是一个病人
 
 `registration.py` 会遍历 `--root/image` 下的**每一个病人文件夹**，逐个独立完成配准：

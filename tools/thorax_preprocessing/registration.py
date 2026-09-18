@@ -69,6 +69,7 @@ def coarse_longitudinal_search(
     initial: sitk.Euler3DTransform,
     search_range_mm: float,
     step_mm: float,
+    sample_count: int = 0,
     progress: Callable[[int, int, float, float], None] | None = None,
 ) -> tuple[sitk.Euler3DTransform, list[dict[str, float]]]:
     """Choose a robust initial superior/inferior translation using mutual information."""
@@ -82,7 +83,10 @@ def coarse_longitudinal_search(
     metric.SetMetricAsMattesMutualInformation(numberOfHistogramBins=32)
     metric.SetMetricFixedMask(fixed_mask_low)
     metric.SetMetricMovingMask(moving_mask_low)
-    offsets = np.arange(-search_range_mm, search_range_mm + step_mm * 0.5, step_mm)
+    if sample_count:
+        offsets = np.linspace(-search_range_mm, search_range_mm, sample_count, endpoint=True)
+    else:
+        offsets = np.arange(-search_range_mm, search_range_mm + step_mm * 0.5, step_mm)
     base_translation = np.asarray(initial.GetTranslation(), dtype=float)
     # The third direction column is the DICOM slice-normal direction.
     direction = np.asarray(moving.GetDirection(), dtype=float).reshape(3, 3)
@@ -425,12 +429,18 @@ def register_case(
         f"CBCT中心={tuple(round(value, 2) for value in initialization.fixed_center_mm)} mm, "
         f"CT中心={tuple(round(value, 2) for value in initialization.moving_center_mm)} mm"
     )
-    log(
-        f"轴向粗搜索 z 偏移（±{args.coarse_z_range_mm:g} mm，步长 {args.coarse_z_step_mm:g} mm）..."
-    )
+    if args.coarse_z_samples:
+        coarse_description = (
+            f"{args.coarse_z_samples} 个采样点，"
+            f"间隔 {2.0 * args.coarse_z_range_mm / (args.coarse_z_samples - 1):.3f} mm"
+        )
+    else:
+        coarse_description = f"步长 {args.coarse_z_step_mm:g} mm"
+    log(f"轴向粗搜索 z 偏移（±{args.coarse_z_range_mm:g} mm，{coarse_description}）...")
 
     def coarse_progress(index: int, count: int, offset: float, value: float) -> None:
-        if index % 5 == 0 or index == count:
+        report_every = max(1, count // 20)
+        if index % report_every == 0 or index == count:
             log(f"    粗搜索 {index}/{count}: z={offset:+.0f} mm metric={value:.5f}")
 
     coarse_initial, coarse_records = coarse_longitudinal_search(
@@ -441,6 +451,7 @@ def register_case(
         center_initial,
         args.coarse_z_range_mm,
         args.coarse_z_step_mm,
+        sample_count=args.coarse_z_samples,
         progress=coarse_progress,
     )
     log(f"  选定 z 偏移 {min(coarse_records, key=lambda item: item['metric'])['offset_mm']:+.0f} mm")
@@ -501,6 +512,12 @@ def register_case(
         "cbct_series_uid": cbct_series.uid,
         "ct_frame_of_reference_uid": ct_series.frame_of_reference_uid,
         "cbct_frame_of_reference_uid": cbct_series.frame_of_reference_uid,
+        "coarse_search_config": {
+            "range_mm": args.coarse_z_range_mm,
+            "step_mm": None if args.coarse_z_samples else args.coarse_z_step_mm,
+            "sample_count": len(coarse_records),
+            "requested_sample_count": args.coarse_z_samples,
+        },
         "coarse_search": coarse_records,
         "initialization": {
             "method": initialization.method,
@@ -613,6 +630,15 @@ def main() -> None:
     parser.add_argument("--coarse-z-range-mm", type=float, default=240.0)
     parser.add_argument("--coarse-z-step-mm", type=float, default=30.0)
     parser.add_argument(
+        "--coarse-z-samples",
+        type=int,
+        default=0,
+        help=(
+            "Exact number of uniformly spaced z candidates across +/- coarse-z-range-mm; "
+            "0 uses --coarse-z-step-mm"
+        ),
+    )
+    parser.add_argument(
         "--initializer",
         choices=("geometry", "moments"),
         default="geometry",
@@ -646,6 +672,12 @@ def main() -> None:
         parser.error("--sampling must be in (0, 1]")
     if args.target_spacing_mm <= 0 or args.size_multiple <= 0:
         parser.error("--target-spacing-mm and --size-multiple must be positive")
+    if args.coarse_z_range_mm < 0 or args.coarse_z_step_mm <= 0:
+        parser.error("--coarse-z-range-mm must be >= 0 and --coarse-z-step-mm must be > 0")
+    if args.coarse_z_samples == 1 or args.coarse_z_samples < 0:
+        parser.error("--coarse-z-samples must be 0 or >= 2")
+    if args.coarse_z_samples and args.coarse_z_range_mm == 0:
+        parser.error("--coarse-z-range-mm must be > 0 when --coarse-z-samples is enabled")
     if args.limit < 0:
         parser.error("--limit must be >= 0")
 
@@ -714,6 +746,9 @@ def main() -> None:
         "image_root": str(image_root),
         "output_root": str(args.output),
         "initializer": args.initializer,
+        "coarse_z_range_mm": args.coarse_z_range_mm,
+        "coarse_z_step_mm": None if args.coarse_z_samples else args.coarse_z_step_mm,
+        "coarse_z_samples": args.coarse_z_samples,
         "discovered_cases": discovered,
         "total_cases": total,
         "succeeded": len(succeeded),

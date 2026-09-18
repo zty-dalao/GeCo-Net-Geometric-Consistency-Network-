@@ -30,6 +30,7 @@ from .dicom_io import (
     load_hu,
     select_series,
 )
+from .registration_initialization import initialize_rigid_transform
 
 
 def preprocess_hu(image: sitk.Image) -> sitk.Image:
@@ -51,16 +52,6 @@ def largest_body_mask(image_hu: sitk.Image) -> sitk.Image:
     components = sitk.ConnectedComponent(mask)
     components = sitk.RelabelComponent(components, sortByObjectSize=True)
     return sitk.Cast(components == 1, sitk.sitkUInt8)
-
-
-def geometry_initializer(fixed: sitk.Image, moving: sitk.Image) -> sitk.Euler3DTransform:
-    transform = sitk.CenteredTransformInitializer(
-        fixed,
-        moving,
-        sitk.Euler3DTransform(),
-        sitk.CenteredTransformInitializerFilter.GEOMETRY,
-    )
-    return sitk.Euler3DTransform(transform)
 
 
 def _shrink(image: sitk.Image, factor: int, is_mask: bool = False) -> sitk.Image:
@@ -421,10 +412,22 @@ def register_case(
     fixed_mask = largest_body_mask(cbct_image)
     moving_mask = largest_body_mask(ct_image)
 
+    initialization = initialize_rigid_transform(
+        fixed,
+        moving,
+        fixed_mask,
+        moving_mask,
+        method=args.initializer,
+    )
+    center_initial = initialization.transform
+    log(
+        f"初始化 {initialization.method}: "
+        f"CBCT中心={tuple(round(value, 2) for value in initialization.fixed_center_mm)} mm, "
+        f"CT中心={tuple(round(value, 2) for value in initialization.moving_center_mm)} mm"
+    )
     log(
         f"轴向粗搜索 z 偏移（±{args.coarse_z_range_mm:g} mm，步长 {args.coarse_z_step_mm:g} mm）..."
     )
-    center_initial = geometry_initializer(fixed, moving)
 
     def coarse_progress(index: int, count: int, offset: float, value: float) -> None:
         if index % 5 == 0 or index == count:
@@ -499,6 +502,11 @@ def register_case(
         "ct_frame_of_reference_uid": ct_series.frame_of_reference_uid,
         "cbct_frame_of_reference_uid": cbct_series.frame_of_reference_uid,
         "coarse_search": coarse_records,
+        "initialization": {
+            "method": initialization.method,
+            "fixed_center_mm": list(initialization.fixed_center_mm),
+            "moving_center_mm": list(initialization.moving_center_mm),
+        },
         "center_initial_transform": transform_summary(center_initial),
         "rigid_transform": transform_summary(rigid),
         "rigid_optimizer": rigid_stats,
@@ -565,6 +573,7 @@ def register_case(
         "case": name,
         "status": "ok",
         "output": str(output),
+        "initializer": initialization.method,
         "quality_pass": bool(metrics["quality_pass"]),
         "quality_flags": quality_flags,
         "body_mask_dice": metrics["body_mask_dice"],
@@ -603,6 +612,15 @@ def main() -> None:
     parser.add_argument("--affine-iterations", type=int, default=140)
     parser.add_argument("--coarse-z-range-mm", type=float, default=240.0)
     parser.add_argument("--coarse-z-step-mm", type=float, default=30.0)
+    parser.add_argument(
+        "--initializer",
+        choices=("geometry", "moments"),
+        default="geometry",
+        help=(
+            "Initial rigid alignment: geometry uses image-grid centers; "
+            "moments uses CT/CBCT body-mask centers of mass"
+        ),
+    )
     parser.add_argument("--rigid-only", action="store_true")
     parser.add_argument(
         "--target-spacing-mm",
@@ -695,6 +713,7 @@ def main() -> None:
     summary = {
         "image_root": str(image_root),
         "output_root": str(args.output),
+        "initializer": args.initializer,
         "discovered_cases": discovered,
         "total_cases": total,
         "succeeded": len(succeeded),

@@ -173,6 +173,54 @@ python -m tools.thorax_preprocessing.registration `
   --size-multiple 4
 ```
 
+### 方案A：使用身体掩膜 `MOMENTS` 重心初始化
+
+初始化逻辑独立在 `registration_initialization.py` 中，并通过 `--initializer` 接入主配准流程：
+
+| 参数值 | 行为 |
+|---|---|
+| `geometry` | 默认值；保持原流程，按CT和CBCT图像网格的几何中心初始化 |
+| `moments` | 按二值身体掩膜的物理质心初始化，再执行原有z粗搜索、6自由度刚性和仿射配准 |
+
+这里使用身体掩膜而不是原始灰度强度计算MOMENTS，减少CT/CBCT强度差异、CBCT散射和床板对重心的
+影响。开启参数后会作用于本次批处理的**全部病人**，与质控是否通过无关。建议写到新的输出根目录，
+保留旧结果用于逐病例比较：
+
+```bash
+python -m tools.thorax_preprocessing.registration \
+  --root dataset/thorax \
+  --output dataset/thorax/registration/moments \
+  --initializer moments \
+  --target-spacing-mm 2 \
+  --size-multiple 4
+```
+
+如果确定要覆盖原来的 `registration/current/<病人>/`，使用：
+
+```bash
+python -m tools.thorax_preprocessing.registration \
+  --root dataset/thorax \
+  --output dataset/thorax/registration/current \
+  --initializer moments \
+  --target-spacing-mm 2 \
+  --size-multiple 4 \
+  --overwrite
+```
+
+每例 `registration_metrics.json` 会增加：
+
+```json
+"initialization": {
+  "method": "moments",
+  "fixed_center_mm": [0.0, 0.0, 0.0],
+  "moving_center_mm": [0.0, 0.0, 0.0]
+}
+```
+
+实际数值为该病例CBCT与pCT身体掩膜在DICOM物理坐标中的质心。程序日志也会打印两个质心，便于
+确认MOMENTS是否产生了明显的x/y/z初始平移。呼吸导致的肺、膈肌局部形变不能由重心初始化、刚性
+或仿射完全消除；本参数改善的是全局初值，仍必须结合 `registration_qa.png` 和质控指标检查结果。
+
 ### 批处理：`image` 下一个文件夹就是一个病人
 
 `registration.py` 会遍历 `--root/image` 下的**每一个病人文件夹**，逐个独立完成配准：

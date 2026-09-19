@@ -4,9 +4,11 @@
 # 训练/评估产生的日志、checkpoint、可视化结果
 train/
 evaluate/
-submodel/decoder/checkpoints/
-submodel/decoder/logs/
-submodel/decoder/metrics/
+# `**/` 可以匹配零层或多层目录，因此下面三条覆盖
+# submodel/decoder/checkpoints/、submodel/xxx/logs/、submodel/a/b/metrics/ 等全部子模块
+submodel/**/checkpoints/
+submodel/**/logs/
+submodel/**/metrics/
 
 # Python
 __pycache__/

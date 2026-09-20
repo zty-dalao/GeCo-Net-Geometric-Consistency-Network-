@@ -67,14 +67,29 @@ projections -> 2D encoder -> geometric backprojection -> view fusion            
 z_projection -> pretrained 3D decoder -> reconstructed volume
 ```
 
-The teacher is not part of inference. The full model is trained in three stages:
+The teacher is not part of inference. `--pretrained_decoder` alone only initializes
+the decoder from the prior and then runs ordinary joint training; the latent
+alignment loss stays off in that mode.
 
-1. Freeze the complete decoder and align the projection latent with the pCT latent.
-2. Unfreeze the complete decoder and jointly fine-tune it at a lower learning rate.
-3. Freeze the low-resolution decoder body and focus on the final upsampling block
-   plus output block. The encoder/aggregator use a very small learning rate by default.
+Staged prior transfer — freeze the decoder, align the latents, then progressively
+unfreeze — additionally requires `--use_adapter` (or `--use_prior_completion`) plus a
+main-model `--pretrained_backbone` checkpoint, because the first stage freezes
+Encoder/Aggregator. See `submodel/adapter/README.md` for the four-phase schedule and
+`submodel/continuous_prior_completion/README.md` for the completion variant. When the
+backbone is trained from scratch there is no backbone checkpoint to freeze, so Phase A
+must be opened with `--phase_a_encoder_lr_factor` / `--phase_a_aggregator_lr_factor`.
 
-Example for 100 total epochs (15 + 65 + 20):
+Without `--use_adapter` (and without `--use_prior_completion`) `use_four_phase` is false,
+so `_training_stage()` returns 0 for every epoch: **the whole schedule is inert**.  The
+phase arguments are then ignored (no error), and `--latent_lambda` is silently disabled
+because `_latent_weight()` returns 0 outside the phased schedule.  `--pretrained_decoder`
+still initialises the decoder, and `--prior_encoder_type` must still match the checkpoint
+(`deep` for a `submodel/deep_encoder` mean/detail prior) because the frozen teacher's
+weights are loaded with `strict=True`.  In that mode every optimizer group shares the base
+LR, so use `--stage0_decoder_lr_factor` to keep the pretrained decoder from being
+fine-tuned at full LR: `0` freezes it, `0.1` gives it 0.1×.
+
+Example for 100 total epochs:
 
 ```bash
 python train.py \
@@ -92,10 +107,7 @@ python train.py \
   --pretrained_decoder submodel/decoder/checkpoints/dental_batch3/ckpt_best_val.pt \
   --latent_lambda 0.1 \
   --latent_cosine_lambda 0.1 \
-  --stage1_epochs 15 \
-  --stage2_epochs 65 \
   --decoder_lr_factor 0.1 \
-  --stage3_backbone_lr_factor 0.01 \
   --query_chunk_size 25000 \
   --bone_lambda 0.05 \
   --bone_lower_hu 300 \
@@ -113,13 +125,20 @@ New arguments:
 
 | Argument | Default | Meaning |
 |---|---:|---|
-| `--pretrained_decoder` | none | Decoder-pretraining checkpoint with `decoder` and `feature_stem` keys. Supplying it activates staged transfer training. |
-| `--latent_lambda` | `0.0` | Stage-1 normalized latent loss weight. The stage-2 weight starts at half this value and linearly falls to zero; stage 3 disables it. |
+| `--pretrained_decoder` | none | Decoder-pretraining checkpoint with `decoder` and `feature_stem` keys. It initializes the decoder and builds the frozen latent teacher. |
+| `--require-gt-source` | none | Fail before training unless every case's `transforms.json` records this `gt_source` for the `gt_volume.nii.gz` label volume (thorax: pass `registered-ct` to guarantee the 3-D labels are the registered pCT). |
+| `--prior_encoder_type` | `shallow` | Use `deep` for the mean/detail prior encoder written by `submodel/deep_encoder`; it must match the checkpoint. |
+| `--latent_lambda` | `0.0` | Latent alignment loss weight in Phase A; it decays linearly across Phase B/C and is disabled in Phase D. |
 | `--latent_cosine_lambda` | `0.1` | Weight of the cosine-distance term inside latent alignment. |
-| `--stage1_epochs` | `15` | Initial epochs with the complete decoder frozen. |
-| `--stage2_epochs` | `65` | Following epochs for full joint fine-tuning. Remaining `--epochs` are stage 3. |
+| `--adapter_lr_factor` | `1.0` | Adapter LR relative to the base LR; `0` freezes the adapter. |
+| `--stage0_decoder_lr_factor` | none | Decoder LR multiplier for ordinary joint training (no `--use_adapter`/`--use_prior_completion`). Unset keeps the base LR for every group; `0` freezes the decoder. |
+| `--phase_a_epochs` | `20` | Phase-A length. Phase A keeps Encoder/Aggregator frozen unless the two `--phase_a_*_lr_factor` options below are positive. |
+| `--phase_a_encoder_lr_factor` | `0.0` | Phase-A encoder LR factor; set it > 0 when the encoder is trained from scratch. |
+| `--phase_a_aggregator_lr_factor` | `0.0` | Phase-A aggregator LR factor; set it > 0 when the aggregator is trained from scratch. |
+| `--phase_b_epochs` | `40` | Phase-B length; unfreezes `encoder.layer3/layer4` and the aggregator. |
+| `--phase_c_epochs` | `80` | Phase-C length; unfreezes the backbone and progressively unfreezes the decoder. |
 | `--decoder_lr_factor` | `0.1` | Decoder LR relative to the base encoder/aggregator LR. |
-| `--stage3_backbone_lr_factor` | `0.01` | Encoder/aggregator LR factor in stage 3. Set it to `0` to freeze them completely. |
+| `--phase_d_backbone_lr_factor` | `0.01` | Encoder/aggregator LR factor in Phase D. Set it to `0` to freeze them completely. |
 | `--bone_lambda` | `0.0` | GT 骨区掩码 L1 权重；设为 `0` 关闭。骨区定义为 GT HU ≥ `--bone_lower_hu`。 |
 | `--bone_lower_hu` | `300` | 骨区 GT 掩码的 HU 下限。 |
 | `--soft_mask_lambda` | `0.0` | GT 软组织窗口掩码 L1 权重；设为 `0` 关闭。GT 位于给定窗口内才计入，但预测不会预先截断。 |
@@ -200,7 +219,7 @@ working allocation when only about 4 GiB is free.
 
 ### Resume transfer training
 
-Resume the latest full checkpoint with the same stage arguments and pretrained path:
+Resume the latest full checkpoint with the same structural arguments and pretrained path:
 
 ```bash
 python train.py \
@@ -212,8 +231,6 @@ python train.py \
   --epochs 100 \
   --pretrained_decoder submodel/decoder/checkpoints/dental_batch3/ckpt_best_val.pt \
   --latent_lambda 0.1 \
-  --stage1_epochs 15 \
-  --stage2_epochs 65 \
   --bone_lambda 0.05 \
   --soft_mask_lambda 0.01 \
   --ssim_lambda 0.01

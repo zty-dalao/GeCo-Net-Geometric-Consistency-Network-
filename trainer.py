@@ -91,6 +91,9 @@ class trainer():
         )
         self.decoder_lr_factor = args.decoder_lr_factor
         self.adapter_lr_factor = args.adapter_lr_factor
+        self.stage0_decoder_lr_factor = args.stage0_decoder_lr_factor
+        self.phase_a_encoder_lr_factor = args.phase_a_encoder_lr_factor
+        self.phase_a_aggregator_lr_factor = args.phase_a_aggregator_lr_factor
         self.phase_b_encoder_lr_factor = args.phase_b_encoder_lr_factor
         self.phase_b_aggregator_lr_factor = args.phase_b_aggregator_lr_factor
         self.phase_c_backbone_lr_factor = args.phase_c_backbone_lr_factor
@@ -107,6 +110,7 @@ class trainer():
             self.bone_lambda, self.soft_mask_lambda, self.ssim_lambda,
             self.adapter_lr_factor, self.decoder_lr_factor,
             self.completion_lr_factor, self.completion_residual_lambda,
+            self.phase_a_encoder_lr_factor, self.phase_a_aggregator_lr_factor,
             self.phase_b_encoder_lr_factor, self.phase_b_aggregator_lr_factor,
             self.phase_c_backbone_lr_factor, self.phase_c_aggregator_lr_factor,
             self.phase_d_backbone_lr_factor, self.phase_d_aggregator_lr_factor,
@@ -115,6 +119,8 @@ class trainer():
         )
         if any(value < 0 for value in nonnegative):
             raise ValueError("Loss weights, LR factors, and anchor factors must be non-negative")
+        if self.stage0_decoder_lr_factor is not None and self.stage0_decoder_lr_factor < 0:
+            raise ValueError("--stage0_decoder_lr_factor must be non-negative")
         if min(
             self.phase_a_epochs,
             self.phase_b_epochs,
@@ -137,10 +143,43 @@ class trainer():
                 "training because four-phase prior transfer is unavailable.",
                 stacklevel=2,
             )
-        if self.use_four_phase and not (args.pretrained_backbone or args.resume):
+        # Phase A freezes Encoder/Aggregator unless the phase-A backbone LR
+        # factors turn them on.  Freezing a randomly initialized backbone leaves
+        # only the zero-initialized Adapter trainable, so that combination is
+        # rejected rather than silently wasting the whole phase.
+        self.phase_a_trains_backbone = (
+            self.phase_a_encoder_lr_factor > 0
+            or self.phase_a_aggregator_lr_factor > 0
+        )
+        if self.transfer_schedule == "legacy_three_stage":
+            first_phase_freezes_backbone = self.legacy_stage1_epochs > 0
+        else:
+            first_phase_freezes_backbone = (
+                self.phase_a_epochs > 0 and not self.phase_a_trains_backbone
+            )
+        if (
+            self.use_four_phase
+            and not (args.pretrained_backbone or args.resume)
+            and first_phase_freezes_backbone
+        ):
             raise ValueError(
-                "Phase A freezes Encoder/Aggregator, so four-phase training requires "
-                "--pretrained_backbone (or --resume)."
+                "The first training stage would freeze the randomly initialized "
+                "Encoder/Aggregator, leaving only the zero-initialized Adapter "
+                "trainable. Pass --pretrained_backbone (or --resume), or train the "
+                "backbone from scratch with --phase_a_encoder_lr_factor and "
+                "--phase_a_aggregator_lr_factor set to positive values."
+            )
+        if (
+            self.use_four_phase
+            and not (args.pretrained_backbone or args.resume)
+            and self.phase_a_epochs == 0
+        ):
+            warnings.warn(
+                "Four-phase training from scratch with --phase_a_epochs 0 skips the "
+                "Phase-A backbone warm-up, and Phase B only unfreezes encoder "
+                "layer3/layer4, so Encoder layer1/layer2 stay frozen and randomly "
+                "initialized until Phase C.",
+                stacklevel=2,
             )
         if self.use_prior_completion and not self.use_four_phase:
             raise ValueError(
@@ -355,9 +394,24 @@ class trainer():
                 return 0.0
             return decay * self.completion_lr_factor
         if stage == 0:
-            return decay
+            if self.stage0_decoder_lr_factor is None:
+                return decay
+            # Ordinary joint training: everything shares the base LR except the
+            # (usually pretrained) decoder, which this factor slows down or freezes.
+            factors = {
+                "decoder_core": self.stage0_decoder_lr_factor,
+                "decoder_up_low": self.stage0_decoder_lr_factor,
+                "decoder_up_high": self.stage0_decoder_lr_factor,
+                "decoder_out": self.stage0_decoder_lr_factor,
+            }
+            return decay * factors.get(group_name, 1.0)
         if stage == 1:
-            return 0.0
+            factors = {
+                "encoder_early": self.phase_a_encoder_lr_factor,
+                "encoder_late": self.phase_a_encoder_lr_factor,
+                "aggregator": self.phase_a_aggregator_lr_factor,
+            }
+            return decay * factors.get(group_name, 0.0)
         if stage == 2:
             factors = {
                 "encoder_late": self.phase_b_encoder_lr_factor,
@@ -562,6 +616,11 @@ class trainer():
         if stage == 0:
             self._set_trainable(self.G_render, True)
             self._set_trainable(self.G_render.adapter, self.adapter_lr_factor > 0)
+            if self.stage0_decoder_lr_factor is not None:
+                self._set_trainable(
+                    self.G_render.decoder, self.stage0_decoder_lr_factor > 0,
+                )
+                self.G_render.decoder.train(self.stage0_decoder_lr_factor > 0)
             if self.prior_stem is not None:
                 self.prior_stem.eval()
             if self.prior_decoder_ref is not None:
@@ -615,6 +674,17 @@ class trainer():
             self.G_render.prior_completion.train(
                 self.use_prior_completion and self.completion_lr_factor > 0
             )
+            # From-scratch runs need the backbone to learn during Phase A; with
+            # the default factors of 0 this stays a pure Adapter warm-up.
+            self._set_trainable(
+                self.G_render.encoder, self.phase_a_encoder_lr_factor > 0,
+            )
+            self.G_render.encoder.train(self.phase_a_encoder_lr_factor > 0)
+            if aggregator is not None:
+                self._set_trainable(
+                    aggregator, self.phase_a_aggregator_lr_factor > 0,
+                )
+                aggregator.train(self.phase_a_aggregator_lr_factor > 0)
         elif stage in (3, 4):
             self._set_trainable(
                 self.G_render.prior_completion, self.completion_lr_factor > 0,

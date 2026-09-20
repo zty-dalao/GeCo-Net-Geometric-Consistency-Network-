@@ -64,7 +64,8 @@ Adapter 用于修正投影分支 latent 与 pCT 预训练 decoder 所使用 late
 | `--adapter_transformer_layers` | `2` | Transformer Encoder Block数量。 |
 | `--adapter_transformer_heads` | `4` | 多头注意力的head数量，必须整除hidden channels。 |
 | `--adapter_transformer_dropout` | `0.1` | Transformer注意力及FFN的dropout。 |
-| `--stage1_backbone_lr_factor` | `1.0` | 第一阶段 Encoder/Aggregator 的学习率倍率。设为0时，第一阶段只训练 Adapter。 |
+| `--phase_a_encoder_lr_factor` | `0.0` | Phase A 的 Encoder 学习率倍率。默认 0 时 Phase A 只训练 Adapter，这要求 backbone 已有预训练权重；从 0 训练时应设为正值。 |
+| `--phase_a_aggregator_lr_factor` | `0.0` | Phase A 的 Aggregator 学习率倍率。默认 0；从 0 训练时应设为正值。 |
 | `--pretrained_backbone PATH` | 无 | 从旧主模型 checkpoint 中只加载 Encoder 和 Aggregator，不加载旧 Decoder、优化器或训练轮数。 |
 | `--pretrained_decoder PATH` | 无 | 加载 submodel 预训练得到的原始 pCT Decoder，同时提供冻结的 `feature_stem` 作为 latent 教师。 |
 
@@ -103,11 +104,10 @@ python train.py \
   --pretrained_decoder submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_best_val.pt \
   --latent_lambda 0.1 \
   --latent_cosine_lambda 0.1 \
-  --stage1_epochs 20 \
-  --stage1_backbone_lr_factor 0 \
-  --stage2_epochs 100 \
+  --phase_a_epochs 20 \
+  --phase_b_epochs 100 \
+  --phase_c_epochs 60 \
   --decoder_lr_factor 0.1 \
-  --stage3_backbone_lr_factor 0.01 \
   --query_chunk_size 25000 \
   --bone_lambda 0.05 \
   --bone_lower_hu 300 \
@@ -120,21 +120,30 @@ python train.py \
 这里的200表示总训练轮数，而不是在旧模型训练轮数上继续计数。新实验会从 epoch 0
 开始记录，但 Encoder/Aggregator 参数来自旧 checkpoint。
 
-训练阶段如下：
+训练阶段如下（`--phase_a_epochs 20 --phase_b_epochs 100 --phase_c_epochs 60`，
+`--epochs 200` 的剩余轮次归 Phase D）：
 
 | 阶段 | epoch范围 | Encoder/Aggregator | Adapter | Decoder |
 |---|---|---|---|---|
-| Stage 1 | 0～19 | 冻结 | 训练 | 完全冻结并保持 eval |
-| Stage 2 | 20～119 | 正常训练 | 训练 | 以 `0.1×` 学习率联合训练 |
-| Stage 3 | 120～199 | 以 `0.01×` 学习率训练 | 训练 | 只训练最后上采样块和输出层 |
+| Phase A | 0～19 | 冻结（`phase_a_encoder_lr_factor`/`phase_a_aggregator_lr_factor` 为 0） | 训练 | 完全冻结并保持 eval |
+| Phase B | 20～119 | 仅 `encoder.layer3/layer4` 与 Aggregator，倍率见 `phase_b_encoder_lr_factor`/`phase_b_aggregator_lr_factor` | 训练 | 冻结并保持 eval |
+| Phase C | 120～179 | `phase_c_backbone_lr_factor`/`phase_c_aggregator_lr_factor` | 训练 | 由后向前分四段解冻 |
+| Phase D | 180～199 | `phase_d_backbone_lr_factor`/`phase_d_aggregator_lr_factor` | 训练 | 全解冻，倍率 `decoder_lr_factor` |
 
 Stage 1 的20轮是诊断性阶段，并非必须固定为20。如果验证集 PSNR/SSIM 在10轮左右
 已经不再改善，可以提前缩短；如果 Adapter loss 仍在稳定下降，可以适当延长。
 
+Phase A 默认把 Encoder/Aggregator 冻结，只训练 Adapter。这个默认值成立的前提是
+backbone 已有合理的预训练权重（由 `--pretrained_backbone` 提供）。若 backbone 是随机
+初始化的，冻结它会让整个阶段只有零初始化的 Adapter 在更新，等于空跑：此时必须要么
+提供 `--pretrained_backbone`，要么按第 5 节显式打开 Phase A 的主干学习率。程序会对
+“从 0 训练 + Phase A 冻结主干”直接报错，而不是静默浪费该阶段。
+
 ## 5. 完全从头训练的对照实验
 
 不传 `--pretrained_backbone` 即可。由于 Encoder/Aggregator 此时是随机初始化，
-Stage 1 不能把 backbone 冻结，应使用：
+Phase A 不能把 backbone 冻结，必须用 `--phase_a_encoder_lr_factor` 和
+`--phase_a_aggregator_lr_factor` 打开主干：
 
 ```bash
 python train.py \
@@ -155,11 +164,12 @@ python train.py \
   --pretrained_decoder submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_best_val.pt \
   --latent_lambda 0.1 \
   --latent_cosine_lambda 0.1 \
-  --stage1_epochs 50 \
-  --stage1_backbone_lr_factor 1.0 \
-  --stage2_epochs 100 \
+  --phase_a_epochs 50 \
+  --phase_a_encoder_lr_factor 1.0 \
+  --phase_a_aggregator_lr_factor 1.0 \
+  --phase_b_epochs 50 \
+  --phase_c_epochs 80 \
   --decoder_lr_factor 0.1 \
-  --stage3_backbone_lr_factor 0.01 \
   --query_chunk_size 25000 \
   --bone_lambda 0.05 \
   --bone_lower_hu 300 \
@@ -169,7 +179,186 @@ python train.py \
   --ssim_lambda 0.01
 ```
 
+各阶段主干是否可训练：
+
+| 阶段 | Encoder early | Encoder late | Aggregator | Adapter | Decoder |
+|---|---:|---:|---:|---:|---:|
+| Phase A | `phase_a_encoder_lr_factor` | `phase_a_encoder_lr_factor` | `phase_a_aggregator_lr_factor` | `adapter_lr_factor` | 冻结并保持 eval |
+| Phase B | 冻结 | `phase_b_encoder_lr_factor` | `phase_b_aggregator_lr_factor` | `adapter_lr_factor` | 冻结并保持 eval |
+| Phase C | `phase_c_backbone_lr_factor` | `phase_c_backbone_lr_factor` | `phase_c_aggregator_lr_factor` | `adapter_lr_factor` | 由后向前分四段解冻 |
+| Phase D | `phase_d_backbone_lr_factor` | `phase_d_backbone_lr_factor` | `phase_d_aggregator_lr_factor` | `adapter_lr_factor` | `decoder_lr_factor` 起 |
+
+注意 Phase B 只解冻 `encoder.layer3/layer4`，`encoder.layer1/layer2` 到 Phase C 才会
+以 `phase_c_backbone_lr_factor` 重新参与。从 0 训练时如果希望 A 阶段之后主干保持连续
+可训练，可以把 `--phase_b_epochs` 设小或设为 0，让训练从 Phase A 直接进入 Phase C。
+
 这个实验应作为对照，不建议替代上一节的推荐实验。
+
+## 5.1 两个可直接对比的命令：有 Adapter / 无 Adapter
+
+下面两条命令**只有 `--use_adapter` 这一个开关不同**，数据、几何、损失权重完全一致，
+因此可以直接比较"latent 接口是否需要适配"。
+
+运行前先定位到项目根目录。注意要用装有 SimpleITK 的解释器；本机的 conda base 环境没有
+SimpleITK，直接 `python train.py` 会在建数据集时报 `ModuleNotFoundError`：
+
+```bash
+cd /root/autodl-tmp/workspace/Geometry-Aware-Attenuation-Learning-for-Sparse-View-CBCT-Reconstruction-main
+```
+
+两条命令共用的前提：
+
+- 数据是 `tools/thorax_preprocessing.prepare_thorax` 生成的 `dataset/thorax/syn_data`，
+  划分是 `data/dataset_split/thorax_split.json`（125/15/15/2）；
+- `--require-gt-source registered-ct` 让 `train.py` 在加载数据前校验每个病例的
+  `transforms.json` 记录 `gt_source=registered-ct`，确保 3D 标签是**配准后的 pCT** 而不是 CBCT；
+- Decoder 由 `submodel/deep_encoder/checkpoints/thorax_deep_decoder/ckpt_best_val.pt` 初始化。
+  `--prior_encoder_type deep` **在两种命令里都必须传**：该 checkpoint 的 `feature_stem` 是
+  mean/detail 版（键为 `detail_downsample.*`、`feature_stem.0/2/4.*`），而默认的 shallow
+  `PriorFeatureStem` 键是 `0.weight`/`2.weight`，教师权重用 `strict=True` 加载，键名不符会直接报错；
+- 都**不传 `--pretrained_backbone`**，即 Encoder/Aggregator 从 0 训练。
+
+### A. 有 Adapter（四阶段 prior transfer）
+
+```bash
+/autdl-tmp/conda_env/GeoAware/bin/python train.py \
+  --name thorax_prior_adapter_from_scratch \
+  --datadir ./dataset/thorax/syn_data \
+  --datatype thorax \
+  --require-gt-source registered-ct \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 200 \
+  --use_adapter \
+  --adapter_hidden_channels 64 \
+  --adapter_lr_factor 1.0 \
+  --pretrained_decoder submodel/deep_encoder/checkpoints/thorax_deep_decoder/ckpt_best_val.pt \
+  --prior_encoder_type deep \
+  --latent_lambda 0.1 --latent_cosine_lambda 0.1 \
+  --phase_a_epochs 50 \
+  --phase_a_encoder_lr_factor 1.0 --phase_a_aggregator_lr_factor 1.0 \
+  --phase_b_epochs 50 --phase_c_epochs 80 \
+  --decoder_lr_factor 0.1 \
+  --query_chunk_size 25000 \
+  --bone_lambda 0.05 --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 --soft_window_high 240 \
+  --ssim_lambda 0.01
+```
+
+**这条命令在做什么**
+
+`--use_adapter` 与 `--pretrained_decoder` 同时存在会激活四阶段调度。Adapter 是插在
+Aggregator 与 Decoder 之间的零初始化残差 CNN（hidden 64，约 14.3 万参数），插入时严格
+等于恒等映射 `Adapter(z)=z`，所以它不会在第一步就给已有的 latent 加噪声。
+
+`--latent_lambda 0.1 --latent_cosine_lambda 0.1` 打开 latent 对齐：冻结的 prior stem 把
+**GT 体数据**编码成教师 latent，投影分支的 latent 去拟合它（L1 + cosine + 通道 mean/std）。
+这是"让投影分支产出的 latent 落进预训练 Decoder 的 latent 基座"的唯一显式监督。
+
+因为不传 `--pretrained_backbone`（主干随机初始化），**Phase A 必须用
+`--phase_a_encoder_lr_factor 1.0 --phase_a_aggregator_lr_factor 1.0` 打开主干**。这两个参数
+默认是 0，即"Phase A 只训练 Adapter"——对随机主干那是空跑，程序会直接报错拦住你。
+
+阶段划分（200 epoch）：
+
+| 阶段 | epoch | Encoder | Aggregator | Adapter | Decoder | latent 权重 |
+|---|---|---|---|---|---|---|
+| A | 0–49 | 1.0× | 1.0× | 1.0× | 冻结 + eval | 0.1（满） |
+| B | 50–99 | 仅 layer3/4 0.2× | 0.5× | 1.0× | 冻结 + eval | 0.1 → 0.07 |
+| C | 100–179 | 0.1× | 0.3× | 1.0× | 由后向前分四段解冻 | 0.07 → 0.01 |
+| D | 180–199 | 0.01× | 0.05× | 1.0× | 全解冻，`decoder_lr_factor` 0.1× | 0.01 → 0 |
+
+基础学习率 `init_lr=1e-4`，每个参数组的实际 LR = `1e-4 × 阶段倍率 × 0.5^(epoch//50)`。
+另外 `--prior_anchor_lambda` 默认 0.1，会在 Phase C/D 生效，用一份冻结的 decoder 副本约束
+输出不要偏离先验 decoder。
+
+**生效的损失**：`mse_3d 1.0 + gd1 1.0 + latent 0.1(→0) + prior_anchor 0.1(仅 C/D) +
+bone 0.05 + soft_mask 0.01 + ssim 0.01 + 重投影 mse_2d 0.01`。
+
+**它验证的假设**：预训练 Decoder 需要的 latent 与投影分支产出的 latent 之间存在接口不兼容，
+这个不兼容可以被一个轻量 Adapter 修正。
+
+### B. 无 Adapter（stage 0 联合训练）
+
+```bash
+/autdl-tmp/conda_env/GeoAware/bin/python train.py \
+  --name thorax_prior_joint_no_adapter \
+  --datadir ./dataset/thorax/syn_data \
+  --datatype thorax \
+  --require-gt-source registered-ct \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 200 \
+  --pretrained_decoder submodel/deep_encoder/checkpoints/thorax_deep_decoder/ckpt_best_val.pt \
+  --prior_encoder_type deep \
+  --stage0_decoder_lr_factor 0.1 \
+  --query_chunk_size 25000 \
+  --bone_lambda 0.05 --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 --soft_window_high 240 \
+  --ssim_lambda 0.01
+```
+
+**这条命令在做什么**
+
+去掉 `--use_adapter` 后 `use_four_phase=False`，`_training_stage()` 对所有 epoch 都返回 0：
+**四阶段调度完全不激活，也不需要写任何 `--phase_*` 参数**（传了会被静默忽略，不报错）。
+此时：
+
+- 整个模型（encoder / aggregator / decoder）全部可训练；
+- 所有参数组共用同一个学习率，即 `1e-4 × 0.5^(epoch//50)`，没有分阶段倍率。
+
+因此有三个**静默行为**必须注意：
+
+| 项 | 行为 | 说明 |
+|---|---|---|
+| `--latent_lambda` | **静默失效**（实测 `latent_weight=0.0`） | `_latent_weight()` 在 stage 0 走 `else: return 0.0`，latent 对齐被关闭，别传 |
+| `--decoder_lr_factor` | **静默失效** | 它只在 stage 3/4/7/8 被引用，stage 0 不读它 |
+| `--prior_encoder_type deep` | **仍然必须传** | 见前面的共用前提，教师权重是 `strict=True` 加载的 |
+
+为了让预训练 Decoder 不被随机主干的噪声梯度以满学习率冲掉，用
+`--stage0_decoder_lr_factor 0.1` 把它降到 1e-5；改成 `0` 则完全冻结 Decoder
+（只训练随机初始化的 Encoder/Aggregator，最"纯粹"的 baseline）。不传该参数时所有组都是
+1e-4，即 Decoder 从第 0 轮就以满学习率微调。
+
+**生效的损失**：`mse_3d 1.0 + gd1 1.0 + bone 0.05 + soft_mask 0.01 + ssim 0.01 +
+重投影 mse_2d 0.01`——**没有 latent 对齐，也没有 prior anchor**（anchor 只在 Phase C/D 生效）。
+
+**它的角色**：对照组。它回答"不加适配、直接联合训练能到什么水平"，但它**不检验** latent
+接口假设：Decoder 的 latent 基座只能靠重建损失间接对齐。
+
+### C. 两者的差异与结果判读
+
+| 维度 | A. 有 Adapter | B. 无 Adapter |
+|---|---|---|
+| 调度 | 四阶段 A/B/C/D | 单一 stage 0 |
+| 主干 LR | 分阶段（1.0→0.2/0.5→0.1→0.01） | 恒 1e-4 |
+| Decoder | A/B 冻结，C 渐进解冻，D 0.1× | 由 `--stage0_decoder_lr_factor` 控制（本例 1e-5） |
+| latent 对齐 | 0.1，跨阶段衰减到 0 | 无 |
+| prior anchor | Phase C/D 为 0.1 | 无 |
+| 额外参数 | +14.3 万（Adapter） | 0 |
+| 对应开关 | `--use_adapter` 及其相关参数 | 只需删掉 `--use_adapter` 和 `--phase_*`，加 `--stage0_decoder_lr_factor` |
+
+判读方式（两组用同一固定 HU/μ 范围算 PSNR/SSIM）：
+
+- A 明显优于 B → latent 接口不兼容确实是主要瓶颈，Adapter 起了作用；
+- A 的 latent loss 稳定下降但 PSNR/SSIM 与 B 基本持平 → 稀疏投影的 latent 本身缺信息，
+  继续加大 Adapter 参数量不会有收益，应该去增加多尺度投影观测；
+- A 反而差于 B（尤其 Phase A/B 就落后）→ 预训练 Decoder 的 latent 基座不适合这批 thorax
+  数据，需要回到 `submodel/deep_encoder` 重新预训练 Decoder，而不是调 Adapter。
+
+> 如果你想要"保留四阶段调度、但 Adapter 不产生任何作用"，可以改用
+> `--use_adapter --adapter_lr_factor 0`：CNN Adapter 末层零初始化且
+> `adapter_lr_factor=0` 时其参数 `requires_grad=False`，前向恒为恒等映射，数学上等价于
+> 没有 Adapter，但阶段划分、分阶段学习率和 latent 对齐全部保留。这比 B 更接近"只去掉
+> Adapter 模块、保留先验迁移调度"的对照。
 
 ## 6. 在旧主模型上直接续训
 
@@ -387,11 +576,10 @@ python train.py \
   --pretrained_decoder submodel/decoder/checkpoints/dental_batch3_region_refine/ckpt_best_val.pt \
   --latent_lambda 0.1 \
   --latent_cosine_lambda 0.1 \
-  --stage1_epochs 20 \
-  --stage1_backbone_lr_factor 0 \
-  --stage2_epochs 100 \
+  --phase_a_epochs 20 \
+  --phase_b_epochs 100 \
+  --phase_c_epochs 60 \
   --decoder_lr_factor 0.1 \
-  --stage3_backbone_lr_factor 0.01 \
   --query_chunk_size 25000 \
   --bone_lambda 0.05 \
   --bone_lower_hu 300 \
@@ -403,7 +591,8 @@ python train.py \
 
 路径中的checkpoint名称是示例，必须替换为实际存在的文件。
 
-第一阶段设置 `--stage1_backbone_lr_factor 0` 后：
+Phase A 保持 `--phase_a_encoder_lr_factor`/`--phase_a_aggregator_lr_factor` 为默认的
+`0` 时：
 
 ```text
 Encoder/Aggregator：冻结
@@ -411,7 +600,7 @@ Transformer Adapter：训练
 Decoder：冻结并保持eval
 ```
 
-第二、第三阶段的训练逻辑与CNN Adapter一致。
+其余阶段的训练逻辑与CNN Adapter一致；若从 0 训练，两个 Phase A 倍率都要设为正值。
 
 ### 9.4 Transformer Adapter评估命令
 

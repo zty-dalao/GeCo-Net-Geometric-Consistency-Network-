@@ -114,3 +114,112 @@ class CBCTDataset(torch.utils.data.Dataset):
         }
 
         return result
+
+
+def describe_gt_source(args, stages=("train", "val", "test", "visual")):
+    """Report, and optionally enforce, where the 3-D training labels come from.
+
+    ``CBCTDataset`` always reads ``<datadir>/<case>/gt_volume.nii.gz``; there is no
+    command-line switch that picks the label volume.  The provenance of that file is
+    recorded in each case's ``transforms.json`` by ``tools.thorax_preprocessing.
+    prepare_thorax`` (``"gt_source": "registered-ct"`` means the label is the
+    registered pCT, while ``"cbct"`` means it is the unregistered CBCT).
+
+    Call this before building the dataloaders so a run cannot silently train against
+    the wrong volume.  ``--require-gt-source`` turns the report into a hard check.
+    """
+    split_path = os.path.join('./data/dataset_split', args.datatype + '_split.json')
+    with open(split_path, 'r') as handle:
+        split = json.load(handle)
+    cases = []
+    for stage in stages:
+        for name in split.get(stage, []):
+            if name not in cases:
+                cases.append(name)
+
+    sources, missing_field, missing_transforms, missing_volume = {}, [], [], []
+    grids, non_divisible = {}, []
+    for name in cases:
+        case_dir = os.path.join(args.datadir, name)
+        transforms_path = os.path.join(case_dir, 'transforms.json')
+        if not os.path.isfile(transforms_path):
+            missing_transforms.append(name)
+            continue
+        if not os.path.isfile(os.path.join(case_dir, 'gt_volume.nii.gz')):
+            missing_volume.append(name)
+            continue
+        with open(transforms_path, 'r') as handle:
+            transforms = json.load(handle)
+        source = transforms.get('gt_source')
+        if source is None:
+            missing_field.append(name)
+        else:
+            sources[source] = sources.get(source, 0) + 1
+        resolution = transforms.get('volume_resolution')
+        if resolution:
+            key = tuple(int(value) for value in resolution)
+            grids[key] = grids.get(key, 0) + 1
+            if any(value % 4 for value in key):
+                non_divisible.append((name, key))
+
+    report = {
+        "datadir": args.datadir,
+        "cases": len(cases),
+        "label_file": "gt_volume.nii.gz",
+        "gt_source_counts": sources,
+        "grids": {"x".join(str(v) for v in key): count for key, count in grids.items()},
+        "grid_not_divisible_by_4": non_divisible,
+        "missing_transforms": missing_transforms,
+        "missing_gt_volume": missing_volume,
+        "transforms_without_gt_source": missing_field,
+    }
+
+    print("=" * 72)
+    print(f"3D 标签体数据（gt_volume.nii.gz）来源: {args.datadir}")
+    if not cases:
+        print("  [WARN] split 内没有任何病例")
+    for source, count in sorted(sources.items()):
+        label = {
+            "registered-ct": "配准后的 pCT（推荐）",
+            "ct": "未配准的计划 CT",
+            "cbct": "CBCT（非配准，仅用于链路自检）",
+        }.get(source, "未知")
+        print(f"  transforms.json gt_source={source}: {count} 例  → {label}")
+    if missing_field:
+        print(
+            f"  [WARN] {len(missing_field)} 例的 transforms.json 没有 gt_source 字段，"
+            f"无法确认标签来源（例如 {missing_field[0]}）"
+        )
+    for grid, count in sorted(report["grids"].items()):
+        print(f"  体积网格 {grid}: {count} 例")
+    if non_divisible:
+        print(
+            f"  [WARN] {len(non_divisible)} 例的体尺寸不能被 4 整除，训练无法进行："
+            f"例如 {non_divisible[0][0]} {non_divisible[0][1]}"
+        )
+    if missing_transforms:
+        print(f"  [WARN] {len(missing_transforms)} 例缺少 transforms.json：例如 {missing_transforms[0]}")
+    if missing_volume:
+        print(f"  [WARN] {len(missing_volume)} 例缺少 gt_volume.nii.gz：例如 {missing_volume[0]}")
+
+    required = getattr(args, "require_gt_source", None)
+    if required is not None:
+        problems = []
+        if missing_transforms:
+            problems.append(f"{len(missing_transforms)} 例缺少 transforms.json")
+        if missing_volume:
+            problems.append(f"{len(missing_volume)} 例缺少 gt_volume.nii.gz")
+        if missing_field:
+            problems.append(f"{len(missing_field)} 例的 transforms.json 没有 gt_source 字段")
+        unexpected = {source: count for source, count in sources.items() if source != required}
+        if unexpected:
+            problems.append(f"gt_source 不是 {required} 的病例：{unexpected}")
+        if problems:
+            raise RuntimeError(
+                f"--require-gt-source {required} 校验失败：" + "；".join(problems)
+                + "。请用 tools.thorax_preprocessing.prepare_thorax 的 "
+                f"--gt-source {required} 重新生成 syn_data，或去掉该参数。"
+            )
+        print(f"  [OK] --require-gt-source {required} 校验通过（{len(cases)} 例）")
+    print("=" * 72)
+    return report

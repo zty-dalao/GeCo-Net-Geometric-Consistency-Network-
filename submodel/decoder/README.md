@@ -46,9 +46,9 @@ data/dataset_split/dental_split.json
 
 总损失为：
 
-\[
+$$
 L_{\text{total}}=L_{3D}+L_{grad}+L_{bone}+L_{soft-mask}
-\]
+$$
 
 其中：
 
@@ -65,14 +65,14 @@ L_soft-mask = soft_mask_lambda × 软组织 GT 掩码损失
 
 骨区由 GT 定义，而不是预测定义：
 
-\[
+$$
 M_{bone}=\mathbb{1}[HU_{GT}\ge300]
-\]
+$$
 
-\[
+$$
 L_{bone,raw}=\operatorname{mean}_{M_{bone}}
 \left(\frac{|\hat{\mu}-\mu_{GT}|}{\mu_{max}-\mu_{min}}\right)
-\]
+$$
 
 预测不会被截断后再参与此损失。因此 GT 为骨骼、预测却落到空气或软组织时，仍会获得把
 预测拉回骨区的梯度。
@@ -81,14 +81,14 @@ L_{bone,raw}=\operatorname{mean}_{M_{bone}}
 
 默认软组织训练窗是 `[-160, 240] HU`：
 
-\[
+$$
 M_{soft}=\mathbb{1}[-160\le HU_{GT}<240]
-\]
+$$
 
-\[
+$$
 L_{soft,raw}=\operatorname{mean}_{M_{soft}}
 \left(\frac{|\widehat{HU}-HU_{GT}|}{400}\right)
-\]
+$$
 
 同样，掩码只依赖 GT，预测值不做窗口截断。因此预测即使已经在软组织窗外，仍有有效梯度。
 
@@ -263,15 +263,15 @@ direction，可直接使用 ITK-SNAP 或 3D Slicer 查看。
 
 评估不会对预测和 GT 分别做 min-max 归一化，而是使用 dental 固定物理范围：
 
-\[
+$$
 [-1000,3095]\ \mathrm{HU}
-\]
+$$
 
 计算：
 
-\[
+$$
 PSNR=-10\log_{10}(MSE_{[0,1]})
-\]
+$$
 
 每病例字段：
 
@@ -311,11 +311,11 @@ air/tissue/bone_oracle_psnr_gain_db
 
 其中：
 
-\[
+$$
 MSE\ share_r=
 \frac{\sum_{i\in r}(\hat{x}_i-x_i)^2}
 {\sum_i(\hat{x}_i-x_i)^2}
-\]
+$$
 
 即 `*_mse_share` 是该区域对该病例**全局 MSE、进而对 PSNR 瓶颈**的贡献率。三类区域的
 `mse_share` 之和约为 1。

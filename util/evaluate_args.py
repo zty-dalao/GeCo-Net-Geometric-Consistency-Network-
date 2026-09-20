@@ -61,6 +61,15 @@ def parse_args():
     parser.add_argument("--dataname", type=str, default='test', help="evaluate dataname") 
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | thorax | Walnuts")
     parser.add_argument(
+        "--require-gt-source",
+        choices=("cbct", "ct", "registered-ct"),
+        default=None,
+        help=(
+            "Fail before evaluation unless every evaluated case's transforms.json records "
+            "this gt_source for the gt_volume.nii.gz reference volume."
+        ),
+    )
+    parser.add_argument(
         "--bone_lambda", type=float, default=0.0,
         help="Report weighted GT-defined bone-mask L1 (0 disables this loss report)",
     )

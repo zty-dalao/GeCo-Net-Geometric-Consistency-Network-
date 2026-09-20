@@ -341,22 +341,30 @@ train.py: error: unrecognized arguments: --stage1_epochs ...
 
 | 旧参数/行为 | 新参数/行为 |
 |---|---|
-| `stage1_epochs` | `phase_a_epochs`，但Phase A现在固定只训练Adapter |
+| `stage1_epochs` | `phase_a_epochs`，Phase A 默认只训练Adapter；从0训练时用 `--phase_a_encoder_lr_factor` / `--phase_a_aggregator_lr_factor` 打开主干 |
 | 原Stage 1同时训练主干 | 独立的Phase B训练Encoder后部和Aggregator |
 | `stage2_epochs` | `phase_b_epochs`和`phase_c_epochs`分别控制适配、Decoder解冻 |
 | `stage3_backbone_lr_factor` | `phase_d_backbone_lr_factor` |
 | Decoder一次性解冻 | Phase C中由后向前分四段解冻 |
 | latent在边界关闭 | Phase D平滑衰减到0 |
 
-如果不提供 `--pretrained_backbone`，还会出现：
+如果不提供 `--pretrained_backbone`，且 Phase A 的主干学习率仍为默认的 0，会出现：
 
 ```text
-Phase A freezes Encoder/Aggregator, so four-phase training requires
---pretrained_backbone (or --resume).
+The first training stage would freeze the randomly initialized Encoder/Aggregator,
+leaving only the zero-initialized Adapter trainable.
 ```
 
-因此不能只删除旧参数后继续使用 `dental_prior_adapter_transformer_from_scratch` 的
-训练含义；必须补充有效的主模型 backbone checkpoint。
+从 0 训练时应显式打开 Phase A 的主干：
+
+```text
+--phase_a_encoder_lr_factor 1.0
+--phase_a_aggregator_lr_factor 1.0
+```
+
+若两者仍为 0，就不能只删除旧参数后继续沿用
+`dental_prior_adapter_transformer_from_scratch` 的训练含义，必须补充有效的主模型
+backbone checkpoint。
 
 ## 8. 评估命令
 

@@ -1,12 +1,16 @@
 import torch
 from models.model import model
-from data.Dataset import CBCTDataset
+from data.Dataset import CBCTDataset, describe_gt_source
 from util.train_args import parse_args
 from trainer import trainer
 
 if __name__ == '__main__':
     args,conf = parse_args()
     device = args.device
+    # 显式报告（并可按 --require-gt-source 强制校验）3D 标签体数据的来源：
+    # CBCTDataset 固定读取 <datadir>/<case>/gt_volume.nii.gz，这里读 transforms.json
+    # 的 gt_source 字段来确认它到底是配准 pCT 还是未配准的 CBCT。
+    describe_gt_source(args)
     ## dataset
     train_dataset = CBCTDataset(args, stage="train")
     val_dataset = CBCTDataset(args, stage="val")

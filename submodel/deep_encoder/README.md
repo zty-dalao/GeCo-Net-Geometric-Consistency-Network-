@@ -267,11 +267,12 @@ python train.py \
   --adapter_lr_factor 1.0 \
   --latent_lambda 0.1 \
   --latent_cosine_lambda 0.1 \
-  --stage1_epochs 50 \
-  --stage1_backbone_lr_factor 1.0 \
-  --stage2_epochs 100 \
+  --phase_a_epochs 50 \
+  --phase_a_encoder_lr_factor 1.0 \
+  --phase_a_aggregator_lr_factor 1.0 \
+  --phase_b_epochs 50 \
+  --phase_c_epochs 80 \
   --decoder_lr_factor 0.1 \
-  --stage3_backbone_lr_factor 0.01 \
   --query_chunk_size 25000 \
   --bone_lambda 0.05 \
   --bone_lower_hu 300 \
@@ -280,6 +281,12 @@ python train.py \
   --soft_window_high 240 \
   --ssim_lambda 0.01
 ```
+
+上面这条命令没有 `--pretrained_backbone`，即主模型 Encoder/Aggregator 从 0 训练，因此
+必须用 `--phase_a_encoder_lr_factor` / `--phase_a_aggregator_lr_factor` 打开 Phase A 的
+主干；若省略这两个参数，Phase A 会冻结随机初始化的主干、只剩零初始化的 Adapter 可训练，
+程序会直接报错而不是空跑。若已有旧主模型 checkpoint，可改为传入 `--pretrained_backbone`
+并省略这两个参数。Phase A/B/C 之和为 180，`--epochs 200` 的剩余 20 轮归 Phase D。
 
 若使用Transformer Adapter，将 `--adapter_type cnn` 改成：
 

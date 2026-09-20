@@ -25,6 +25,16 @@ def parse_args():
     parser.add_argument("--resume", "-r", action="store_true", help="continue training")
     parser.add_argument("--resume_name", type=str, default=None, help='resume which trained net for continue training')
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | thorax | Walnuts")
+    parser.add_argument(
+        "--require-gt-source",
+        choices=("cbct", "ct", "registered-ct"),
+        default=None,
+        help=(
+            "Fail before training unless every case's transforms.json records this "
+            "gt_source for the gt_volume.nii.gz label volume. Pass 'registered-ct' to "
+            "guarantee the 3-D labels are the registered pCT and not the CBCT."
+        ),
+    )
     parser.add_argument("--gd1_lambda", type=float, default=1.0, help='weight for gradient loss')
     parser.add_argument("--mse_lambda_2d", type=float, default=0.01, help='weight for projection loss')  
     parser.add_argument(
@@ -105,6 +115,17 @@ def parse_args():
         help="Adapter learning-rate multiplier relative to the base learning rate",
     )
     parser.add_argument(
+        "--stage0_decoder_lr_factor",
+        type=float,
+        default=None,
+        help=(
+            "Optional decoder LR multiplier for ordinary joint training (the schedule that "
+            "runs when neither --use_adapter nor --use_prior_completion is set). Without it "
+            "every group uses the base LR, so a pretrained decoder is fine-tuned at full LR "
+            "from epoch 0. Set 0 to freeze the decoder, or e.g. 0.1 to fine-tune it slowly."
+        ),
+    )
+    parser.add_argument(
         "--use_prior_completion",
         action="store_true",
         help="Enable geometry-conditioned continuous latent residual completion",
@@ -162,6 +183,25 @@ def parse_args():
         type=int,
         default=0,
         help="Extra Phase-C epochs after progressive decoder unfreezing; decoder remains fully unfrozen",
+    )
+    parser.add_argument(
+        "--phase_a_encoder_lr_factor",
+        type=float,
+        default=0.0,
+        help=(
+            "Phase-A encoder LR multiplier. Default 0 keeps Phase A adapter-only, "
+            "which requires --pretrained_backbone; set >0 to train the randomly "
+            "initialized Encoder from scratch in Phase A."
+        ),
+    )
+    parser.add_argument(
+        "--phase_a_aggregator_lr_factor",
+        type=float,
+        default=0.0,
+        help=(
+            "Phase-A Aggregator LR multiplier. See --phase_a_encoder_lr_factor. "
+            "Default 0 keeps Phase A adapter-only."
+        ),
     )
     parser.add_argument("--phase_b_encoder_lr_factor", type=float, default=0.2)
     parser.add_argument("--phase_b_aggregator_lr_factor", type=float, default=0.5)
@@ -293,6 +333,8 @@ def parse_args():
                      'config file: ' , args.conf , '\n' ,
                      'Dataset: ' , args.datadir , '\n' ,
                      'datatype: ', args.datatype, '\n' ,
+                     'require_gt_source: ', str(args.require_gt_source), '\n' ,
+                     'stage0_decoder_lr_factor: ', str(args.stage0_decoder_lr_factor), '\n' ,
                      'start scanning angle: ', str(args.start), '\n',
                      'end scanning angle: ', str(args.end), '\n',
                      'input views: ' , str(args.nviews) , '\n',
@@ -347,6 +389,8 @@ def parse_args():
         str(max(0, args.epochs - args.phase_a_epochs - args.phase_b_epochs
                 - (args.completion_phase_epochs if args.use_prior_completion else 0)
                 - args.phase_c_epochs - args.phase_c_hold_epochs)), ']\n',
+        'phase_a_encoder_lr_factor: ', str(args.phase_a_encoder_lr_factor), '\n',
+        'phase_a_aggregator_lr_factor: ', str(args.phase_a_aggregator_lr_factor), '\n',
         'phase_b_encoder_lr_factor: ', str(args.phase_b_encoder_lr_factor), '\n',
         'phase_b_aggregator_lr_factor: ', str(args.phase_b_aggregator_lr_factor), '\n',
         'phase_c_backbone_lr_factor: ', str(args.phase_c_backbone_lr_factor), '\n',

@@ -5,7 +5,7 @@
 
 ```text
 dataset/thorax/syn_data/<case>/
-├── gt_volume.nii.gz       # 训练标签，默认使用同次采集的 CBCT
+├── gt_volume.nii.gz       # 训练标签；正式训练用配准后的 pCT（--gt-source registered-ct）
 ├── proj.nii.gz            # (N, H, W) 的非负线积分投影
 ├── transforms.json        # 每帧 12 维扫描几何和体数据几何
 ├── cbct_volume.nii.gz     # CBCT，HU -> 线性衰减系数 μ
@@ -24,7 +24,7 @@ dataset/thorax/syn_data/2026-06-04_065713/
 
 因此不会在 `syn_data` 下分别创建“CT文件夹”和“投影文件夹”。两类数据必须进入同一个病例目录，
 才能由数据加载器按一次索引同时取到 `gt_volume.nii.gz`、`proj.nii.gz` 和 `transforms.json`。
-默认样本名取自 `projection/<case>` 的目录名；处理单病例时可用 `--case-name` 显式覆盖。
+输出病例名一律取自病人文件夹名（`image/<case>` 与 `projection/<case>` 必须同名），脚本按病人逐个转换。
 配准中间结果单独保存在 `dataset/thorax/registration/current`，不作为第二个训练病例。
 
 ## 当前数据识别结果与处理原则
@@ -32,8 +32,8 @@ dataset/thorax/syn_data/2026-06-04_065713/
 - DICOM 不是靠文件名区分。脚本按 `SeriesInstanceUID` 分组，忽略 RTSTRUCT，再以
   Manufacturer/SeriesDescription 区分计划 CT 与 Varian CBCT；也可以显式传 UID。
 - 当前病例中计划 CT 和 CBCT 的 `FrameOfReferenceUID` 不同。中心裁剪只能统一轴向覆盖范围，
-  **不能完成空间配准**。因此默认 `--gt-source cbct`。只有在外部确认或完成 CT→CBCT 刚性/形变
-  配准之后，才应使用 `--gt-source ct`。
+  **不能完成空间配准**。正式训练应使用 `--gt-source registered-ct` 并指向
+  `registration/current`；`--gt-source cbct` 只用于无配准时检查投影转换和数据链路。
 - 只读取 `Acquisitions/<id>/Proj_*.xim` 作为患者投影；`Calibrations` 下的 XIM 只用于空气/弓形
   滤板校正，不会混入训练帧。
 - `projection-mode=log` 先按源角度为患者帧匹配最近的空气/弓形滤板校准帧，用每帧
@@ -84,11 +84,11 @@ SAD/SID 和 XIM 属性名。新增病例后应先执行一次。
 
 ### 将 Varian XIM 转为 `proj.nii.gz`
 
-投影转换集成在 `prepare_thorax.py` 中。它会读取
-`dataset/thorax/projection/<case>/Acquisitions/<id>/Proj_*.xim`，完成空气校正、曝光归一化、
-负对数变换、均匀角度选择和探测器重采样，然后将结果写入
-`dataset/thorax/syn_data/<case>/proj.nii.gz`；同一命令也会生成训练所需的体数据和
-`transforms.json`。以下命令使用CBCT作为临时GT，只适合无配准时检查投影转换和数据链路：
+投影转换集成在 `prepare_thorax.py` 中，它按**病人文件夹**逐个转换：对每个 `image/<case>`
+单独做 `discover_series` + `select_series`，读取该病人自己的
+`projection/<case>/Acquisitions/<id>/Proj_*.xim`，完成空气校正、曝光归一化、负对数变换、
+均匀角度选择和探测器重采样，然后把体数据、投影和 `transforms.json` 写入
+`dataset/thorax/syn_data/<case>/`。正式训练的命令是：
 
 ```powershell
 conda activate deeplearning
@@ -96,29 +96,36 @@ conda activate deeplearning
 python -m tools.thorax_preprocessing.prepare_thorax `
   --root dataset/thorax `
   --output dataset/thorax/syn_data `
-  --gt-source cbct `
+  --gt-source registered-ct `
+  --registered-ct-root dataset/thorax/registration/current `
   --ct-crop match-cbct-center `
   --projection-bin 1 `
   --projection-resolution 256 `
   --output-views 360
 ```
 
-若已经完成CT→CBCT配准，应将上面的 `--gt-source cbct` 改为：
+`--registered-ct-root` 是批处理形式，脚本按
+`<root>/<病人文件夹名>/registered_ct_mu.nii.gz` 取每个病人自己的配准 CT；单病例场景仍可用
+`--registered-ct-mu` 直接指定一个文件。先用 `--limit N` 小批量验证参数与耗时：
 
 ```powershell
-  --gt-source registered-ct `
-  --registered-ct-mu dataset/thorax/registration/current/registered_ct_mu.nii.gz
+  --limit 3
 ```
+
+只检查投影转换和数据链路、尚无配准时，可改用 `--gt-source cbct`（此时 GT 是原生 CBCT 网格，
+深度往往不能被 4 整除，不能直接训练）。
 
 `--gt-source` 只选择 `gt_volume.nii.gz` 的来源，不参与XIM投影像素的生成。在其余投影参数相同
 时，`cbct` 与 `registered-ct` 两种模式得到的 `proj.nii.gz` 相同；不同的是GT内容以及
-`transforms.json` 中的体积网格。当前病例的原生CBCT深度为118，不能被模型的4倍上采样尺度整除，
-因此正式训练推荐 `registered-ct`：它使用配准后的pCT作为GT，并采用
-248×248×120、2 mm等方、各维可被4整除的标准网格。
+`transforms.json` 中的体积网格。原生CBCT网格的深度（如118）不能被模型的4倍上采样尺度整除，
+因此正式训练用 `registered-ct`：配准网格是 2 mm 等方且各维可被 4 整除（例如
+248×248×120），`batch_summary.json` 的 `gt_not_divisible_by_4` 会列出不满足该条件的病例。
 
-脚本会跳过空的投影病例目录，以及缺少 `Scan.xml`、`Acquisitions/<id>` 或
-`Proj_*.xim` 的不完整投影目录；跳过信息以 `[SKIP]` 开头。若整个 `image` 目录没有DICOM，
-或缺少CT/CBCT任一序列，本次转换也会直接跳过且不生成病例目录。
+单个病人出错只会记录该病人并继续处理后面的病人，不会中断整批。会被跳过的情形包括：缺
+`Scan.xml` / `Acquisitions/<id>` / `Proj_*.xim` 的投影目录、缺 CT 或 CBCT 序列、缺
+`Calibrations/AIR-*` 空气校准帧（`--projection-mode log` 必需，`raw` 可绕过），以及
+`--gt-source registered-ct` 时缺少对应的 `registered_ct_mu.nii.gz`。每个病人的结论写入输出根目录的
+`batch_summary.json`（`succeeded` / `skipped_detail` / `failed_detail` / `cases`）。
 
 原始探测器是 1280×320，spacing 为 0.336×1.344 mm，物理视野约为
 430.08×430.08 mm。默认按物理空间线性插值为 256×256、1.68×1.68 mm，避免二维 CNN 将
@@ -148,13 +155,16 @@ python -m tools.thorax_preprocessing.prepare_thorax `
 
 | 参数 | 默认值 | 含义 |
 |---|---:|---|
-| `--gt-source` | `cbct` | `gt_volume.nii.gz` 使用 CBCT、未配准 CT 或 `registered-ct` |
+| `--gt-source` | `cbct` | `gt_volume.nii.gz` 使用 CBCT、未配准 CT 或 `registered-ct`；正式训练用 `registered-ct` |
+| `--registered-ct-root` | 无 | `--gt-source registered-ct` 的批处理形式：含 `<病人>/registered_ct_mu.nii.gz` 的父目录 |
+| `--registered-ct-mu` | 无 | 单病例形式，直接指定一个已配准 CT 文件 |
 | `--ct-crop` | `match-cbct-center` | CT 中心裁到与 CBCT 相同的 z 物理长度；`none` 保留完整 CT |
 | `--ct-slices` | 无 | 覆盖自动裁剪，显式指定 `START:END` |
 | `--projection-mode` | `log` | 空气校正并取负对数；`raw` 仅用于诊断 |
 | `--projection-bin` | `1` | 插值前的探测器 block mean 因子 |
 | `--projection-resolution` | `256` | 投影统一后的正方形分辨率；0 表示保留 bin 后的形状 |
 | `--output-views` | `360` | 根据实测源角度就近抽取的均匀输出视角数 |
+| `--limit` | `0` | 只处理前 N 个病人文件夹（0 表示全部），便于小批量试跑 |
 | `--detector-offset-u-mm` | Scan.xml | 覆盖 ImagerLat；只在核对几何后修改 |
 | `--max-line-integral` | `20` | 投影异常值上限 |
 
@@ -295,23 +305,23 @@ python -m tools.thorax_preprocessing.registration `
 248×248×120、2×2×2 mm。批处理时应根据质控阈值筛出少量失败病例人工复核，
 不能仅凭优化器收敛就认定配准正确。测试参数或只需要刚性变换时可加 `--rigid-only`。
 
-配准质控通过后，可直接把重采样后的 CT 选为训练 GT。注意注册结果的路径现在多了一层病人文件夹：
+配准质控通过后，直接把重采样后的 CT 选为训练 GT。注册结果每个病人一层子文件夹，
+`prepare_thorax.py` 会按病人自动定位：
 
 ```powershell
 python -m tools.thorax_preprocessing.prepare_thorax `
-  --root <单病人的数据根> `
+  --root dataset/thorax `
   --output dataset/thorax/syn_data `
   --gt-source registered-ct `
-  --registered-ct-mu dataset/thorax/registration/current/<病人文件夹名>/registered_ct_mu.nii.gz `
+  --registered-ct-root dataset/thorax/registration/current `
   --projection-bin 1 `
   --projection-resolution 256
 ```
 
-> ⚠️ `prepare_thorax.py` 目前**仍是单病例入口**：它对 `root/image` 只做一次
-> `discover_series` + `select_series`，然后把同一份 CBCT/CT 写进 `projection` 下的每个病例目录。
-> 在含 184 个病人的 `dataset/thorax` 上直接运行会跨病人错配，也不会按病人读取各自的
-> `registration/current/<病人>/registered_ct_mu.nii.gz`。它需要与 `registration.py` 一样改成
-> 按病人文件夹批处理；在那之前，请只对单个病人的数据根运行它。
+> ✅ `prepare_thorax.py` 已改为与 `registration.py` 一致的**按病人批处理**入口：每个病人都用
+> 自己的 `image/<case>` DICOM 和 `registration/current/<case>/registered_ct_mu.nii.gz`，
+> 单个病人失败或数据缺失只记录进 `batch_summary.json` 并继续。转换后在
+> `dataset/thorax/syn_data/batch_summary.json` 查看成功/跳过/失败清单。
 
 准备脚本会验证注册 CT 与 CBCT 的方向及物理中心兼容，并把 CBCT 重采样到注册 CT 的标准训练
 网格，避免把未重采样的 CT 错当作投影监督标签。
@@ -367,10 +377,11 @@ python -m tools.thorax_preprocessing.validate_thorax `
 
 ## 4. 建立训练划分并训练
 
-转换会在输出根目录生成一个含 `train/val/test/visual` 的 `thorax_split.json` 草稿。因为
-`train.py` 会无条件创建四个 DataLoader，当前只有一个病例时四组会暂时复用同一病例，以便做
-端到端或过拟合测试；**这种结果不能作为验证/测试指标**。有足够病例后请按患者级别重新划分，
-避免患者泄漏。确认后复制到：
+转换会在输出根目录生成一个含 `train/val/test/visual` 的 `thorax_split.json` 草稿，它只是把
+本次成功转换的病例按名称排序后切分（test/val 各约占 10%），**不含任何患者级去泄漏逻辑，也
+不保证覆盖全部病例**。若 `data/dataset_split/thorax_split.json` 已有经过确认的划分，请
+**不要**用草稿覆盖它；正确做法是对照 `batch_summary.json` 的 `skipped_detail`，把本次被跳过的
+病例从已有划分中移除，其余划分保持不变。只有在还没有划分时，才把草稿作为起点：
 
 ```powershell
 Copy-Item dataset/thorax/syn_data/thorax_split.json data/dataset_split/thorax_split.json
@@ -383,11 +394,23 @@ python train.py `
   -n=thorax_real `
   -D=./dataset/thorax/syn_data `
   --datatype=thorax `
+  --require-gt-source registered-ct `
   --train_scale=4 `
   --fusion=ada `
   --start=0 --end=360 --nviews=20 `
   --angle_sampling=uniform --is_train
 ```
+
+`train.py`（以及 `evaluate.py`）会先打印 3D 标签体数据的来源报告：`CBCTDataset` 固定读取
+`<datadir>/<case>/gt_volume.nii.gz`，报告从各病例的 `transforms.json` 读出 `gt_source` 字段，
+并列出来源分布与体积网格。加 `--require-gt-source registered-ct` 可把报告变成硬校验：只要有病例的
+`gt_source` 不是 `registered-ct`（或缺少该字段），训练会在加载数据前直接报错，避免误把 CBCT 当标签。
+
+> 病例目录里的三个体积文件含义不同，不要混用：
+> - `gt_volume.nii.gz` —— **训练/评估实际读取的标签**，本数据集里等于配准后的 pCT
+>   （与 `registration/current/<case>/registered_ct_mu.nii.gz` 逐字节相同）；
+> - `ct_volume.nii.gz` —— 原生 spacing 的中心裁剪计划 CT，**未配准**，仅供排查；
+> - `cbct_volume.nii.gz` —— CBCT（仅用于生成 `proj.nii.gz`）。
 
 真实投影不支持 `angle_sampling=random`，因为该分支会从 GT 在线生成 DRR；训练和评估都应使用
 `uniform`，实际位姿从 `transforms.json/frames[*].vec` 读取。

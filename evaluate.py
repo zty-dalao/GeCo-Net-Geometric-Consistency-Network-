@@ -1,6 +1,6 @@
 import os
 import warnings
-from data.Dataset import CBCTDataset
+from data.Dataset import CBCTDataset, describe_gt_source
 from util.evaluate_args import parse_args
 import datetime
 from models.model import model
@@ -84,6 +84,8 @@ def fmt_loss_str(losses):
 
 if __name__ == '__main__':
     args, conf = parse_args()
+    # 评估指标同样以 gt_volume.nii.gz 作为参考，先显式确认它的来源。
+    describe_gt_source(args, stages=(args.dataname,))
     device = args.device
 
     # logs

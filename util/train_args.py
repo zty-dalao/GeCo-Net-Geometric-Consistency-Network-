@@ -24,10 +24,40 @@ def parse_args():
     parser.add_argument("--is_train", action="store_true", help="Training or visualization")
     parser.add_argument("--resume", "-r", action="store_true", help="continue training")
     parser.add_argument("--resume_name", type=str, default=None, help='resume which trained net for continue training')
+    parser.add_argument(
+        "--init-lr",
+        type=float,
+        default=None,
+        help=(
+            "Override conf/train.conf lr_sche.init_lr. Use it to raise the LR when "
+            "resuming; without it the main trainer has no CLI control over the base LR."
+        ),
+    )
+    parser.add_argument(
+        "--lr-step-size",
+        type=float,
+        default=None,
+        help="Override conf/train.conf lr_sche.step_size (epochs between LR halvings).",
+    )
+    parser.add_argument(
+        "--lr-gamma",
+        type=float,
+        default=None,
+        help="Override conf/train.conf lr_sche.gamma (LR decay factor).",
+    )
+    parser.add_argument(
+        "--lr-decay-restart",
+        action="store_true",
+        help=(
+            "Count the LR decay from the resumed epoch instead of epoch 0, so a resumed "
+            "run starts again at the full base LR. Without it, epoch//step_size keeps "
+            "decaying across the resume and epoch 199 runs at 1/8 of init_lr."
+        ),
+    )
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | thorax | Walnuts")
     parser.add_argument(
         "--require-gt-source",
-        choices=("cbct", "ct", "registered-ct"),
+        choices=("cbct", "ct", "registered-ct", "cbct-fixed"),
         default=None,
         help=(
             "Fail before training unless every case's transforms.json records this "
@@ -334,6 +364,10 @@ def parse_args():
                      'Dataset: ' , args.datadir , '\n' ,
                      'datatype: ', args.datatype, '\n' ,
                      'require_gt_source: ', str(args.require_gt_source), '\n' ,
+                     'init_lr: ', str(args.init_lr), '\n' ,
+                     'lr_step_size: ', str(args.lr_step_size), '\n' ,
+                     'lr_gamma: ', str(args.lr_gamma), '\n' ,
+                     'lr_decay_restart: ', "yes" if args.lr_decay_restart else "no", '\n' ,
                      'stage0_decoder_lr_factor: ', str(args.stage0_decoder_lr_factor), '\n' ,
                      'start scanning angle: ', str(args.start), '\n',
                      'end scanning angle: ', str(args.end), '\n',

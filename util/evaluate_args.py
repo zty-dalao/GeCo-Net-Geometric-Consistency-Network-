@@ -62,7 +62,7 @@ def parse_args():
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | thorax | Walnuts")
     parser.add_argument(
         "--require-gt-source",
-        choices=("cbct", "ct", "registered-ct"),
+        choices=("cbct", "ct", "registered-ct", "cbct-fixed"),
         default=None,
         help=(
             "Fail before evaluation unless every evaluated case's transforms.json records "

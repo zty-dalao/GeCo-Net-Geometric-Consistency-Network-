@@ -358,7 +358,243 @@ bone 0.05 + soft_mask 0.01 + ssim 0.01 + 重投影 mse_2d 0.01`。
 > `--use_adapter --adapter_lr_factor 0`：CNN Adapter 末层零初始化且
 > `adapter_lr_factor=0` 时其参数 `requires_grad=False`，前向恒为恒等映射，数学上等价于
 > 没有 Adapter，但阶段划分、分阶段学习率和 latent 对齐全部保留。这比 B 更接近"只去掉
-> Adapter 模块、保留先验迁移调度"的对照。
+> Adapter 模块、保留先验迁移调度"的对照。具体见 §5.3。
+
+## 5.2 阶段内部：每个 epoch 到底谁在训练
+
+`_apply_training_stage()` 的规则是"先把整个 `G_render` 冻结，再按当前阶段逐个打开部件"，
+LR 乘子给 0 就等价于冻结（同时 `requires_grad=False` 且 `eval()`）。所以**LR 乘子表就是
+可训练部件表**。
+
+参数分组（`trainer.py:308-345`）：
+
+| 组名 | 对应参数 |
+|---|---|
+| `encoder_early` | Encoder 中不以 `model.layer3.` / `model.layer4.` 开头的参数，即 layer1/layer2 |
+| `encoder_late` | `model.layer3.*` + `model.layer4.*` |
+| `aggregator` | Aggregator 全部参数 |
+| `adapter` | `LatentAdapter`（`--use_adapter` 时；否则是 `nn.Identity()`） |
+| `decoder_out` | `decoder.out_blk` |
+| `decoder_up_high` | `decoder.up_blk_list[-1]` |
+| `decoder_up_low` | `decoder.up_blk_list[:-1]` |
+| `decoder_core` | `decoder.in_blk` + `decoder.res_blk_list` + `decoder.res_blk_last` |
+
+按 §5.1 A 的配置（`--phase_a_epochs 50 --phase_b_epochs 50 --phase_c_epochs 80 --epochs 200`，
+未开 `--use_prior_completion`）：
+
+| 阶段 | epoch | enc.layer1/2 | enc.layer3/4 | aggregator | adapter | decoder | latent | anchor |
+|---|---|---|---|---|---|---|---|---|
+| A | 0–49 | 1.0 | 1.0 | 1.0 | 1.0 | **冻结** | 0.1（恒定） | 0 |
+| B | 50–99 | **冻结** | 0.2 | 0.5 | 1.0 | **冻结** | 0.1 → 0.07 | 0 |
+| C lvl1 | 100–119 | 0.1 | 0.1 | 0.3 | 1.0 | 仅 `out_blk` = 0.1 | 0.07 → | 0.1 |
+| C lvl2 | 120–139 | 0.1 | 0.1 | 0.3 | 1.0 | + `up_blk_list[-1]` | ↓ | 0.1 |
+| C lvl3 | 140–159 | 0.1 | 0.1 | 0.3 | 1.0 | + `up_blk_list[:-1]` | ↓ | 0.1 |
+| C lvl4 | 160–179 | 0.1 | 0.1 | 0.3 | 1.0 | + `in_blk`/`res_blk*` = 0.01，**全解冻** | ↓ 0.01 | 0.1 |
+| D | 180–199 | 0.01 | 0.01 | 0.05 | 1.0 | 全解冻，0.1 / core 0.01 | 0.01 → 0 | 0.025 |
+
+表内数字是相对 `--init-lr` 的乘子，**已剔除** `0.5^(epoch//50)` 的衰减；实测自
+`trainer.py` 的同名方法。latent 权重的完整轨迹是 Phase A 恒为 0.1，Phase B 内
+0.1 → 0.07（因子 1.0 → `--phase_b_latent_end_factor` 0.7），Phase C 内 0.07 → 0.01
+（因子 0.7 → `--phase_c_latent_end_factor` 0.1），Phase D 内 0.01 → 0，即
+`--latent_lambda` 乘一个线性因子。anchor 在 Phase C 保持 0.1，Phase D 衰减到
+`0.1 x --phase_d_anchor_factor(0.25) = 0.025`。
+
+三个容易误判的点：
+
+1. **B 阶段不是"只训 Aggregator"。** 它训 `encoder.layer3/layer4`（0.2）、Aggregator（0.5）
+   和 Adapter；冻结的只有 `encoder.layer1/layer2` 和整个 Decoder。
+2. **C 阶段一开始 Decoder 只有 `out_blk` 在训**，不是"整个模型一起训"。解冻顺序是
+   输出端 → 最后一个上采样块 → 更早的上采样块 → 残差主体，由 `_phase_c_decoder_level()`
+   按 `progress = (epoch - phase_start) / phase_c_epochs` 映射到 1–4 级，本配置下每 20 epoch
+   升一级。到 C lvl4（epoch 160）才第一次全模型可训练，最贴近"整体训练"的是 Phase D。
+3. **`encoder.layer1/layer2` 在 B 阶段会被重新冻结。** A 阶段因为
+   `--phase_a_encoder_lr_factor 1.0` 是整体解冻的，而 Phase B 的 `_lr_multiplier` 只列了
+   `encoder_late` 和 `aggregator` 两组，`encoder_early` 落到 `factors.get(..., 0.0)` 变成 0。
+   原设计假设是"A 阶段只训 Adapter（主干由 `--pretrained_backbone` 提供）"，从零训练时这条
+   曲线就是非单调的。想要单调解冻，把 `--phase_b_epochs` 设为 `0` 跳过 B 阶段：
+   A（整体 1.0）直接接 C（整体 0.1），且 `phase_d_epochs` 从 20 涨到 70。
+
+## 5.3 不想要 Adapter 时的三种做法
+
+### 为什么删掉 `--use_adapter` 后 `--phase_*` 会失效
+
+四阶段调度的唯一开关是：
+
+```python
+# trainer.py:87-90
+self.use_four_phase = bool(
+    self.is_train
+    and args.pretrained_decoder
+    and (args.use_adapter or args.use_prior_completion)
+)
+```
+
+而 `_training_stage()` 的第一行是 `if not self.use_four_phase: return 0`。所以
+`--use_adapter` 和 `--use_prior_completion` 都不给时，200 个 epoch 全部落在 stage 0，
+`--phase_a_epochs`、`--phase_a_encoder_lr_factor`、`--phase_c_epochs`、`--decoder_lr_factor`
+这些参数**从头到尾没有被读过**——它们是"未使用"而不是"被删除"，传了不报错但也毫无效果。
+同理 `--latent_lambda` 在 stage 0 会静默失效（`_latent_weight()` 走 `else: return 0.0`），
+`--prior_anchor_lambda` 也不生效（stage 0 返回 0）。
+
+### 三种做法对比
+
+| 做法 | 四阶段调度 | 逐层解冻 | Adapter 作用 | latent 对齐 / anchor |
+|---|---|---|---|---|
+| 删掉 `--use_adapter`（§5.1 B） | **无**，全 stage 0 | 无 | —（模块被换成 `nn.Identity()`） | 静默失效 |
+| **`--use_adapter --adapter_lr_factor 0`** | **有** | **有** | **恒等映射，无作用** | 生效 |
+| `--use_prior_completion` | 有 | 有 | 无 Adapter，改走 Completion 分支 | 生效 |
+
+第三种会换成 `submodel/continuous_prior_completion` 那套结构，且因为
+`completion_phase_epochs` 是插在 Phase B 与 Phase C 之间的独立阶段（默认 40），必须把
+`--epochs` 调大给 Phase D 留出额度，例如
+`--epochs 240 --phase_a_epochs 50 --phase_b_epochs 50 --phase_c_epochs 80`。
+
+### 第二种的原理
+
+`LatentAdapter.forward()` 是 `z + project(encode(z))`，而最后一层卷积零初始化：
+
+```python
+# submodel/adapter/model.py
+nn.init.zeros_(self.net[-1].weight)
+nn.init.zeros_(self.net[-1].bias)
+```
+
+`--adapter_lr_factor 0` 让它 `requires_grad=False`，参数永远停在零初始化状态，于是
+`forward(z) = z + 0 = z` 恒等——**数学上与 `nn.Identity()` 完全等价**：模块内没有
+BatchNorm，不存在 running stats 漂移，代价只是多 14.3 万参数的前向计算。
+
+同时 `use_adapter=True` 让 `use_four_phase` 成立，**阶段划分、分阶段学习率、Decoder 逐层
+解冻、latent 对齐、prior anchor 全部保留**。这才是"不要 Adapter 的作用、但要先验迁移
+调度"的正确写法：
+
+```bash
+/autdl-tmp/conda_env/GeoAware/bin/python train.py \
+  --name thorax_prior_adapter_inert_from_scratch \
+  --datadir ./dataset/thorax/syn_data \
+  --datatype thorax \
+  --require-gt-source registered-ct \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 200 \
+  --use_adapter \
+  --adapter_lr_factor 0 \
+  --pretrained_decoder submodel/deep_encoder/checkpoints/thorax_deep_decoder/ckpt_best_val.pt \
+  --prior_encoder_type deep \
+  --latent_lambda 0.1 --latent_cosine_lambda 0.1 \
+  --phase_a_epochs 50 \
+  --phase_a_encoder_lr_factor 1.0 --phase_a_aggregator_lr_factor 1.0 \
+  --phase_b_epochs 50 --phase_c_epochs 80 \
+  --decoder_lr_factor 0.1 \
+  --query_chunk_size 25000 \
+  --bone_lambda 0.05 --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 --soft_window_high 240 \
+  --ssim_lambda 0.01
+```
+
+与 §5.1 A 的差别只有两处：加 `--adapter_lr_factor 0`，去掉 `--adapter_hidden_channels`。
+注意 `--latent_lambda` 和 `--prior_anchor_lambda` 是**损失层**的机制，与 Adapter 模块无关，
+所以它们在两种做法里都照常生效——如果你要的是"连 latent 监督也不要"的纯净对照，那应该
+用 §5.1 B 的 stage 0 命令，而不是把 `--adapter_lr_factor` 设成 0。
+
+> **不要直接把 `--use_adapter --adapter_lr_factor 0` 追加到 §5.1 B 的 stage 0 命令后面。**
+> 那条命令没有 phase 配置，而一旦加上 `--use_adapter`，`use_four_phase` 就变成 True，
+> `--phase_*` 参数从"被忽略"变成"被读取"，于是落到默认值
+> `--phase_a_epochs 20` / `--phase_a_encoder_lr_factor 0.0` / `--phase_a_aggregator_lr_factor 0.0`。
+> 这三者叠加会让 Phase A 冻住**随机初始化**的 Encoder/Aggregator，只剩下零初始化的 Adapter
+> 可训练，`trainer.py:158-166` 的门禁会直接抛 `ValueError` 拦下你。同理 `--latent_lambda`
+> 默认是 `0.0`，不写就等于把 latent 对齐关掉。而 `--stage0_decoder_lr_factor` 只在
+> `if stage == 0:` 分支被读，在四阶段下是惰性的，应当去掉。
+
+## 5.4 换成 CBCT 先验（thorax CBCT-GT 变体）
+
+§5.1 的两条命令用的是"GT = 配准后 pCT"的 `dataset/thorax/syn_data` + pCT 先验
+`thorax_deep_decoder`。若主模型的 GT 改成了 CBCT（`syn_data_cbct_gt`，
+`gt_source=cbct-fixed`），教师也应该换成在 CBCT 上预训练的 Decoder，否则教师与本模型的
+输出域不一致。CBCT 先验的预训练与评估见 `submodel/deep_encoder/README.md` §4 与 §5.1。
+
+两套命令相对 §5.1 只改四行：`--name`、`--datadir`、`--require-gt-source`、
+`--pretrained_decoder`。
+
+**四阶段（Adapter 恒等）**
+
+```bash
+/autdl-tmp/conda_env/GeoAware/bin/python train.py \
+  --name thorax_prior_adapter_cbct_prior \
+  --datadir ./dataset/thorax/syn_data_cbct_gt \
+  --datatype thorax \
+  --require-gt-source cbct-fixed \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 200 \
+  --use_adapter \
+  --adapter_lr_factor 0 \
+  --pretrained_decoder submodel/deep_encoder/checkpoints/thorax_deep_decoder_cbct_prior/ckpt_best_val.pt \
+  --prior_encoder_type deep \
+  --latent_lambda 0.1 --latent_cosine_lambda 0.1 \
+  --phase_a_epochs 50 \
+  --phase_a_encoder_lr_factor 1.0 --phase_a_aggregator_lr_factor 1.0 \
+  --phase_b_epochs 50 --phase_c_epochs 80 \
+  --decoder_lr_factor 0.1 \
+  --query_chunk_size 25000 \
+  --bone_lambda 0.05 --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 --soft_window_high 240 \
+  --ssim_lambda 0.01
+```
+
+**stage 0（无 Adapter、无 Completion）**
+
+```bash
+/autdl-tmp/conda_env/GeoAware/bin/python train.py \
+  --name thorax_prior_joint_cbct_prior \
+  --datadir ./dataset/thorax/syn_data_cbct_gt \
+  --datatype thorax \
+  --require-gt-source cbct-fixed \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 200 \
+  --pretrained_decoder submodel/deep_encoder/checkpoints/thorax_deep_decoder_cbct_prior/ckpt_best_val.pt \
+  --prior_encoder_type deep \
+  --stage0_decoder_lr_factor 0.1 \
+  --query_chunk_size 25000 \
+  --bone_lambda 0.05 --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 --soft_window_high 240 \
+  --ssim_lambda 0.01
+```
+
+第二条必须保留 `--stage0_decoder_lr_factor`：无 Adapter/Completion 时它是**唯一**能控制
+Decoder 的开关，不给的话 `_lr_multiplier()` 的 stage 0 走
+`if self.stage0_decoder_lr_factor is None: return decay`，预训练 Decoder 会与其他层共用
+1e-4 从第 0 轮起满速微调。三档取值：`0` 全程冻结 Decoder（只训 Encoder/Aggregator，
+等价于永久 Phase A）；`0.1` 慢速微调（推荐）；`1.0` 等同不传。
+
+若既不想引入 Adapter 又想拿到"冻结 → 慢速 → 全量"的粗粒度课程，可以用分段 resume 手动
+搭出来（每次 resume 都会按新的命令行值重新计算 `--stage0_decoder_lr_factor`，`--epochs`
+填累计绝对值，`--resume` 不带 `--resume_name` 时读 `ckpt_latest`）：
+
+```bash
+# 1) epoch 0-49    Decoder 冻结，只训 Encoder + Aggregator
+... --epochs 50  --stage0_decoder_lr_factor 0
+# 2) epoch 50-119  Decoder 慢速微调
+... --resume --epochs 120 --stage0_decoder_lr_factor 0.1
+# 3) epoch 120-199 Decoder 全速联合训练
+... --resume --epochs 200 --stage0_decoder_lr_factor 1.0
+```
+
+但这仍然是"整体冻结 → 整体放开"，**没有逐层解冻**：stage 0 对 4 个 Decoder 组用同一个
+乘子，真正的分层解冻只存在于 Phase C。要逐层解冻就必须用 `--use_adapter` 或
+`--use_prior_completion` 之一激活四阶段。
 
 ## 6. 在旧主模型上直接续训
 
@@ -393,6 +629,22 @@ python train.py \
 这里 `--epochs 400` 是最终总 epoch，若 checkpoint 的 `iter=200`，则继续执行
 epoch 200～399。不要同时期待 `--pretrained_decoder` 覆盖旧 Decoder；resume 模式以完整
 主模型 checkpoint 为准。
+
+若续训的目的是**打破已经压得很低的学习率**（`lr_sche` 的 `0.5 ** (epoch // 50)` 在第 199 轮
+只剩初值的 1/8），可加以下开关：
+
+```text
+--init-lr 1e-4            # 覆盖配置里的基础学习率
+--lr-decay-restart        # 让衰减从续训 epoch 重新起算，续训首轮即回到完整 init_lr
+--lr-step-size 1000       # 可选：让学习率在续训期间保持恒定
+```
+
+`--lr-decay-restart` 是关键：不加它，即使把 `--init-lr` 提到 3e-4，第 200 轮实际也只有
+1.875e-05。此外 `ckpt_N` 保存于第 N 轮结束之后，因此 `--resume_name N` 从 epoch N+1 继续；
+`ckpt_history/ckpt_<resume_name>` 不存在时程序会直接报 `FileNotFoundError`，不会静默从头重跑。
+关于带 Adapter 的续训，四阶段参数会按新参数重算，因此可以顺便调整 `--phase_*_epochs`；但必须继续
+传 `--pretrained_decoder` 与 `--prior_encoder_type deep`，否则 `use_four_phase` 会变成 `False`、
+阶段调度与 latent 对齐全部失效。详见 `submodel/deep_encoder/README.md` 第 8.1 节。
 
 ## 7. 评估命令
 

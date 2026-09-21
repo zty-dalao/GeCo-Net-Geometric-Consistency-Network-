@@ -286,11 +286,26 @@ class trainer():
 
         # lr scheduler & optimizer
         init_lr = conf.get_float('lr_sche.init_lr')
-        self.init_lr = init_lr
         step_size = conf.get_float('lr_sche.step_size') # 每 50 个 epoch 衰减一次
         gamma = conf.get_float('lr_sche.gamma')         # 每次衰减为原来的 0.5
+        if getattr(args, "init_lr", None) is not None:
+            if args.init_lr <= 0:
+                raise ValueError("--init-lr must be positive")
+            init_lr = float(args.init_lr)
+        if getattr(args, "lr_step_size", None) is not None:
+            if args.lr_step_size < 1:
+                raise ValueError("--lr-step-size must be >= 1")
+            step_size = float(args.lr_step_size)
+        if getattr(args, "lr_gamma", None) is not None:
+            if not 0 < args.lr_gamma <= 1:
+                raise ValueError("--lr-gamma must be in (0, 1]")
+            gamma = float(args.lr_gamma)
+        self.init_lr = init_lr
         self.lr_step_size = step_size
         self.lr_gamma = gamma
+        self.lr_decay_restart = bool(getattr(args, "lr_decay_restart", False))
+        # Epoch the LR decay is counted from; updated to the resumed epoch below.
+        self.lr_decay_origin = 0
         encoder_late_parameters = []
         encoder_early_parameters = []
         for name, parameter in self.G_render.encoder.named_parameters():
@@ -346,6 +361,10 @@ class trainer():
         self.history_model_path = "%s/ckpt_history/ckpt_" % (self.checkpoints_path,)# 按 epoch 归档的历史权重
         if args.resume: 
             self.load_ckpt(self.resume_name)    # 断电加载
+        if self.lr_decay_restart:
+            # A resumed run restarts the decay schedule, so it trains at the full
+            # base LR instead of continuing from 0.5**(epoch//step_size).
+            self.lr_decay_origin = self.begin_epochs
         self._apply_training_stage(self.begin_epochs)
 
     def _training_stage(self, epoch):
@@ -383,7 +402,8 @@ class trainer():
         return torch.cuda.amp.autocast(dtype=torch.float16)
 
     def _lr_multiplier(self, epoch, group_name):
-        decay = self.lr_gamma ** (epoch // max(1, self.lr_step_size))
+        decay_epoch = max(0, epoch - self.lr_decay_origin)
+        decay = self.lr_gamma ** (decay_epoch // max(1, self.lr_step_size))
         stage = self._training_stage(epoch)
         if group_name == "adapter":
             if stage == 5:
@@ -1012,8 +1032,13 @@ class trainer():
                 data = torch.load(self.latest_model_path, map_location=self.device)
         else:
             history_path = self.history_model_path + str(resume_name)
-            if os.path.exists(history_path):
-                data = torch.load(history_path, map_location=self.device)
+            if not os.path.exists(history_path):
+                raise FileNotFoundError(
+                    f"--resume_name {resume_name} 对应的 checkpoint 不存在: {history_path}. "
+                    "先用 `ls train/checkpoints/<name>/ckpt_history/` 确认可用的 epoch；"
+                    "否则会从 epoch 0 重新开始并覆盖已有日志。"
+                )
+            data = torch.load(history_path, map_location=self.device)
         if data is not None:
             if 'G_render' in data:
                 if getattr(self.G_render, "use_adapter", False):

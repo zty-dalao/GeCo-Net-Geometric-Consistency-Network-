@@ -127,6 +127,57 @@ python -m tools.thorax_preprocessing.prepare_thorax `
 `--gt-source registered-ct` 时缺少对应的 `registered_ct_mu.nii.gz`。每个病人的结论写入输出根目录的
 `batch_summary.json`（`succeeded` / `skipped_detail` / `failed_detail` / `cases`）。
 
+### GT 变体：`registered-ct` 与 `cbct-fixed`
+
+`proj.nii.gz` 是从该病人的 Varian CBCT 采集重建出来的，所以**CBCT 本身才是与投影同源配对的
+GT**；`registered-ct` 用的是计划 CT，来自另一次扫描，天然带配准残差。两种 GT 各有用途：
+
+| GT | 来源 | 特点 | 适合 |
+|---|---|---|---|
+| `registered-ct` | `prepare_thorax --gt-source registered-ct` 写出 | 248×248×120 @2mm，μ 上限约 0.088 | 与计划 CT 对齐的临床口径；跨病人一致性好 |
+| `cbct-fixed` | 由 `registration/current/<case>/fixed_cbct_hu.nii.gz` 生成 | 同一网格，μ 上限约 0.05–0.06 | 标签与投影严格同源配对，任务更"自洽" |
+
+`fixed_cbct_hu.nii.gz` 是 `registration.py` 把 CBCT 重采样到训练网格的结果（配准时的 fixed
+image），与 `registered_ct_mu.nii.gz` **同体素网格**。因此换成它时投影、几何、体积网格全都不用改，
+唯一变化的是标签内容——两组实验严格配对可比。
+
+生成变体（不动原 `syn_data`，投影用软链接复用，155 例只占约 1.8 GB）：
+
+```powershell
+python -m tools.thorax_preprocessing.make_cbct_gt_variant `
+  --source dataset/thorax/syn_data `
+  --registration-root dataset/thorax/registration/current `
+  --output dataset/thorax/syn_data_cbct_gt `
+  --split-file data/dataset_split/thorax_split.json
+```
+
+该工具会逐例校验 `fixed_cbct_hu.nii.gz` 的网格：尺寸与 spacing 必须和 `transforms.json` 的
+`volume_resolution`/`volume_spacing` 一致，完整网格（含 origin）必须与 `registered_ct_mu.nii.gz`
+一致，任一项不符即 `[FAIL]` 而不写出，避免标签落到投影几何之外的网格上。注意
+`transforms.json` 的 `volume_origin` 是**按等中心重算的声明值**（`-size×spacing/2`，见
+`centered_geometry`），并不是 NIfTI 里存的 origin——训练时几何完全以 `transforms.json` 为准，
+NIfTI 的 origin/spacing 元数据不参与渲染，因此校验只对 size/spacing 与声明值比对。
+
+生成的 GT 是 `hu_to_mu(fixed_cbct_hu)`，与 `registered_ct_mu.nii.gz` **使用同一套 HU→μ 转换**，
+所以两组标签的 μ 标定一致。
+
+校验与训练：
+
+```powershell
+python -m tools.thorax_preprocessing.validate_thorax --data dataset/thorax/syn_data_cbct_gt
+```
+
+```bash
+# 只改 --datadir 与 --require-gt-source 两行，其余与 registered-ct 版本完全相同
+  --datadir ./dataset/thorax/syn_data_cbct_gt \
+  --require-gt-source cbct-fixed \
+```
+
+> ⚠️ **评估口径**：`cbct-fixed` 的 μ 上限只有 0.05–0.06，而配准 pCT 到 0.088。评估用的 PSNR 是
+> 在**固定物理范围** `[-1000, 3095] HU` 上算的，标签本身幅值更小就会让 MSE 更小、PSNR 更高。
+> 因此 CBCT-GT 组的 PSNR **天然偏高**，不能直接判定为"更好"。建议在评估时额外以
+> `registered_ct_mu` 作为独立参考体再算一次指标，否则两组 PSNR 不可横比。
+
 原始探测器是 1280×320，spacing 为 0.336×1.344 mm，物理视野约为
 430.08×430.08 mm。默认按物理空间线性插值为 256×256、1.68×1.68 mm，避免二维 CNN 将
 各向异性像素误认为普通方形像素。`--projection-bin` 可在插值前做 block mean；推荐保持为1，

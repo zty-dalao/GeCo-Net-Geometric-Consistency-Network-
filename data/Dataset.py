@@ -183,6 +183,7 @@ def describe_gt_source(args, stages=("train", "val", "test", "visual")):
             "registered-ct": "配准后的 pCT（推荐）",
             "ct": "未配准的计划 CT",
             "cbct": "CBCT（非配准，仅用于链路自检）",
+            "cbct-fixed": "重采样到训练网格的 CBCT（与投影同源配对，248x248xN @2mm）",
         }.get(source, "未知")
         print(f"  transforms.json gt_source={source}: {count} 例  → {label}")
     if missing_field:

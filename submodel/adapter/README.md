@@ -514,7 +514,8 @@ BatchNorm，不存在 running stats 漂移，代价只是多 14.3 万参数的�
 §5.1 的两条命令用的是"GT = 配准后 pCT"的 `dataset/thorax/syn_data` + pCT 先验
 `thorax_deep_decoder`。若主模型的 GT 改成了 CBCT（`syn_data_cbct_gt`，
 `gt_source=cbct-fixed`），教师也应该换成在 CBCT 上预训练的 Decoder，否则教师与本模型的
-输出域不一致。CBCT 先验的预训练与评估见 `submodel/deep_encoder/README.md` §4 与 §5.1。
+输出域不一致。CBCT 先验的预训练与评估见 `submodel/deep_encoder/README.md` §4 与 §5.3
+（两个 GT 变体的先验实测对比）。
 
 两套命令相对 §5.1 只改四行：`--name`、`--datadir`、`--require-gt-source`、
 `--pretrained_decoder`。
@@ -644,7 +645,7 @@ epoch 200～399。不要同时期待 `--pretrained_decoder` 覆盖旧 Decoder；
 `ckpt_history/ckpt_<resume_name>` 不存在时程序会直接报 `FileNotFoundError`，不会静默从头重跑。
 关于带 Adapter 的续训，四阶段参数会按新参数重算，因此可以顺便调整 `--phase_*_epochs`；但必须继续
 传 `--pretrained_decoder` 与 `--prior_encoder_type deep`，否则 `use_four_phase` 会变成 `False`、
-阶段调度与 latent 对齐全部失效。详见 `submodel/deep_encoder/README.md` 第 8.1 节。
+阶段调度与 latent 对齐全部失效。详见 `submodel/deep_encoder/README.md` §6.1.3。
 
 ## 7. 评估命令
 

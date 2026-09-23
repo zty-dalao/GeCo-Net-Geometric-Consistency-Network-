@@ -1,0 +1,802 @@
+{
+  "data_root": "/root/autodl-tmp/workspace/Geometry-Aware-Attenuation-Learning-for-Sparse-View-CBCT-Reconstruction-main/dataset/thorax/syn_data_cbct_gt",
+  "step_mm": 1.0,
+  "mode": "angle-convention",
+  "angle_convention": {
+    "sign": 1.0,
+    "offset_degrees": 0.0,
+    "u_sign": 1.0
+  },
+  "cases": {
+    "2026-06-04_065713": {
+      "geometry": {
+        "volume_resolution": [
+          248,
+          248,
+          120
+        ],
+        "declared_origin": [
+          -248.0,
+          -248.0,
+          -120.0
+        ],
+        "true_origin": [
+          -247.0,
+          -247.0,
+          -123.99053955078125
+        ],
+        "volume_phy": [
+          496.0,
+          496.0,
+          240.0
+        ],
+        "array_shape_zyx": [
+          120,
+          248,
+          248
+        ],
+        "sid": 1540.0,
+        "sad": 1000.0
+      },
+      "views": {},
+      "angle_convention": {
+        "s=-1 c=80 u=+1": {
+          "sign": -1.0,
+          "offset_degrees": 80.0,
+          "u_sign": 1.0,
+          "mean_r_at_same_view": 0.61297,
+          "mean_r_at_best_view": 0.66092,
+          "mean_abs_best_minus_frame": 45.83,
+          "hits_within_3_views": 2,
+          "frames": 12,
+          "per_frame": [
+            {
+              "frame": 0,
+              "r_same": 0.2062,
+              "best_view": 266,
+              "r_best": 0.2946
+            },
+            {
+              "frame": 30,
+              "r_same": 0.3406,
+              "best_view": 49,
+              "r_best": 0.5921
+            },
+            {
+              "frame": 60,
+              "r_same": 0.7892,
+              "best_view": 70,
+              "r_best": 0.8366
+            },
+            {
+              "frame": 90,
+              "r_same": 0.8411,
+              "best_view": 99,
+              "r_best": 0.8432
+            },
+            {
+              "frame": 120,
+              "r_same": 0.7809,
+              "best_view": 290,
+              "r_best": 0.7985
+            },
+            {
+              "frame": 150,
+              "r_same": 0.6547,
+              "best_view": 156,
+              "r_best": 0.6629
+            },
+            {
+              "frame": 180,
+              "r_same": 0.5075,
+              "best_view": 178,
+              "r_best": 0.5086
+            },
+            {
+              "frame": 210,
+              "r_same": 0.524,
+              "best_view": 235,
+              "r_best": 0.5944
+            },
+            {
+              "frame": 240,
+              "r_same": 0.7423,
+              "best_view": 254,
+              "r_best": 0.8008
+            },
+            {
+              "frame": 270,
+              "r_same": 0.8403,
+              "best_view": 280,
+              "r_best": 0.8427
+            },
+            {
+              "frame": 300,
+              "r_same": 0.7147,
+              "best_view": 300,
+              "r_best": 0.7147
+            },
+            {
+              "frame": 330,
+              "r_same": 0.4141,
+              "best_view": 311,
+              "r_best": 0.4419
+            }
+          ]
+        },
+        "s=-1 c=82 u=+1": {
+          "sign": -1.0,
+          "offset_degrees": 82.5,
+          "u_sign": 1.0,
+          "mean_r_at_same_view": 0.61955,
+          "mean_r_at_best_view": 0.66163,
+          "mean_abs_best_minus_frame": 42.0,
+          "hits_within_3_views": 3,
+          "frames": 12,
+          "per_frame": [
+            {
+              "frame": 0,
+              "r_same": 0.2097,
+              "best_view": 266,
+              "r_best": 0.296
+            },
+            {
+              "frame": 30,
+              "r_same": 0.3332,
+              "best_view": 48,
+              "r_best": 0.5593
+            },
+            {
+              "frame": 60,
+              "r_same": 0.7948,
+              "best_view": 68,
+              "r_best": 0.8284
+            },
+            {
+              "frame": 90,
+              "r_same": 0.8463,
+              "best_view": 90,
+              "r_best": 0.8463
+            },
+            {
+              "frame": 120,
+              "r_same": 0.7935,
+              "best_view": 261,
+              "r_best": 0.8058
+            },
+            {
+              "frame": 150,
+              "r_same": 0.6714,
+              "best_view": 154,
+              "r_best": 0.6749
+            },
+            {
+              "frame": 180,
+              "r_same": 0.5163,
+              "best_view": 177,
+              "r_best": 0.5182
+            },
+            {
+              "frame": 210,
+              "r_same": 0.5202,
+              "best_view": 234,
+              "r_best": 0.5788
+            },
+            {
+              "frame": 240,
+              "r_same": 0.7433,
+              "best_view": 252,
+              "r_best": 0.7884
+            },
+            {
+              "frame": 270,
+              "r_same": 0.8418,
+              "best_view": 278,
+              "r_best": 0.8446
+            },
+            {
+              "frame": 300,
+              "r_same": 0.7311,
+              "best_view": 299,
+              "r_best": 0.7322
+            },
+            {
+              "frame": 330,
+              "r_same": 0.4329,
+              "best_view": 311,
+              "r_best": 0.4666
+            }
+          ]
+        },
+        "s=-1 c=85 u=+1": {
+          "sign": -1.0,
+          "offset_degrees": 85.0,
+          "u_sign": 1.0,
+          "mean_r_at_same_view": 0.62475,
+          "mean_r_at_best_view": 0.66214,
+          "mean_abs_best_minus_frame": 41.58,
+          "hits_within_3_views": 2,
+          "frames": 12,
+          "per_frame": [
+            {
+              "frame": 0,
+              "r_same": 0.214,
+              "best_view": 266,
+              "r_best": 0.2997
+            },
+            {
+              "frame": 30,
+              "r_same": 0.3235,
+              "best_view": 47,
+              "r_best": 0.525
+            },
+            {
+              "frame": 60,
+              "r_same": 0.7981,
+              "best_view": 65,
+              "r_best": 0.8187
+            },
+            {
+              "frame": 90,
+              "r_same": 0.8507,
+              "best_view": 90,
+              "r_best": 0.8507
+            },
+            {
+              "frame": 120,
+              "r_same": 0.8034,
+              "best_view": 261,
+              "r_best": 0.8133
+            },
+            {
+              "frame": 150,
+              "r_same": 0.6862,
+              "best_view": 152,
+              "r_best": 0.6867
+            },
+            {
+              "frame": 180,
+              "r_same": 0.5252,
+              "best_view": 176,
+              "r_best": 0.5284
+            },
+            {
+              "frame": 210,
+              "r_same": 0.5158,
+              "best_view": 234,
+              "r_best": 0.564
+            },
+            {
+              "frame": 240,
+              "r_same": 0.7418,
+              "best_view": 250,
+              "r_best": 0.7744
+            },
+            {
+              "frame": 270,
+              "r_same": 0.843,
+              "best_view": 277,
+              "r_best": 0.8447
+            },
+            {
+              "frame": 300,
+              "r_same": 0.7449,
+              "best_view": 296,
+              "r_best": 0.7483
+            },
+            {
+              "frame": 330,
+              "r_same": 0.4502,
+              "best_view": 311,
+              "r_best": 0.4918
+            }
+          ]
+        },
+        "s=-1 c=88 u=+1": {
+          "sign": -1.0,
+          "offset_degrees": 87.5,
+          "u_sign": 1.0,
+          "mean_r_at_same_view": 0.6287,
+          "mean_r_at_best_view": 0.66264,
+          "mean_abs_best_minus_frame": 41.42,
+          "hits_within_3_views": 3,
+          "frames": 12,
+          "per_frame": [
+            {
+              "frame": 0,
+              "r_same": 0.2194,
+              "best_view": 266,
+              "r_best": 0.3058
+            },
+            {
+              "frame": 30,
+              "r_same": 0.312,
+              "best_view": 47,
+              "r_best": 0.4895
+            },
+            {
+              "frame": 60,
+              "r_same": 0.7972,
+              "best_view": 64,
+              "r_best": 0.8063
+            },
+            {
+              "frame": 90,
+              "r_same": 0.8547,
+              "best_view": 90,
+              "r_best": 0.8547
+            },
+            {
+              "frame": 120,
+              "r_same": 0.811,
+              "best_view": 264,
+              "r_best": 0.819
+            },
+            {
+              "frame": 150,
+              "r_same": 0.6985,
+              "best_view": 149,
+              "r_best": 0.6987
+            },
+            {
+              "frame": 180,
+              "r_same": 0.5337,
+              "best_view": 170,
+              "r_best": 0.5401
+            },
+            {
+              "frame": 210,
+              "r_same": 0.5111,
+              "best_view": 233,
+              "r_best": 0.5503
+            },
+            {
+              "frame": 240,
+              "r_same": 0.7371,
+              "best_view": 248,
+              "r_best": 0.7587
+            },
+            {
+              "frame": 270,
+              "r_same": 0.8476,
+              "best_view": 270,
+              "r_best": 0.8476
+            },
+            {
+              "frame": 300,
+              "r_same": 0.7565,
+              "best_view": 295,
+              "r_best": 0.7642
+            },
+            {
+              "frame": 330,
+              "r_same": 0.4655,
+              "best_view": 311,
+              "r_best": 0.5167
+            }
+          ]
+        },
+        "s=-1 c=90 u=+1": {
+          "sign": -1.0,
+          "offset_degrees": 90.0,
+          "u_sign": 1.0,
+          "mean_r_at_same_view": 0.63015,
+          "mean_r_at_best_view": 0.66265,
+          "mean_abs_best_minus_frame": 41.58,
+          "hits_within_3_views": 4,
+          "frames": 12,
+          "per_frame": [
+            {
+              "frame": 0,
+              "r_same": 0.2256,
+              "best_view": 266,
+              "r_best": 0.3141
+            },
+            {
+              "frame": 30,
+              "r_same": 0.2981,
+              "best_view": 46,
+              "r_best": 0.4534
+            },
+            {
+              "frame": 60,
+              "r_same": 0.7899,
+              "best_view": 62,
+              "r_best": 0.7915
+            },
+            {
+              "frame": 90,
+              "r_same": 0.8562,
+              "best_view": 90,
+              "r_best": 0.8562
+            },
+            {
+              "frame": 120,
+              "r_same": 0.8163,
+              "best_view": 264,
+              "r_best": 0.8232
+            },
+            {
+              "frame": 150,
+              "r_same": 0.7075,
+              "best_view": 147,
+              "r_best": 0.7108
+            },
+            {
+              "frame": 180,
+              "r_same": 0.541,
+              "best_view": 169,
+              "r_best": 0.5534
+            },
+            {
+              "frame": 210,
+              "r_same": 0.506,
+              "best_view": 233,
+              "r_best": 0.5379
+            },
+            {
+              "frame": 240,
+              "r_same": 0.7284,
+              "best_view": 247,
+              "r_best": 0.7424
+            },
+            {
+              "frame": 270,
+              "r_same": 0.8492,
+              "best_view": 269,
+              "r_best": 0.8493
+            },
+            {
+              "frame": 300,
+              "r_same": 0.7649,
+              "best_view": 293,
+              "r_best": 0.7785
+            },
+            {
+              "frame": 330,
+              "r_same": 0.4786,
+              "best_view": 311,
+              "r_best": 0.5412
+            }
+          ]
+        },
+        "s=-1 c=92 u=+1": {
+          "sign": -1.0,
+          "offset_degrees": 92.5,
+          "u_sign": 1.0,
+          "mean_r_at_same_view": 0.62815,
+          "mean_r_at_best_view": 0.66189,
+          "mean_abs_best_minus_frame": 41.5,
+          "hits_within_3_views": 2,
+          "frames": 12,
+          "per_frame": [
+            {
+              "frame": 0,
+              "r_same": 0.2321,
+              "best_view": 259,
+              "r_best": 0.3243
+            },
+            {
+              "frame": 30,
+              "r_same": 0.2813,
+              "best_view": 46,
+              "r_best": 0.4172
+            },
+            {
+              "frame": 60,
+              "r_same": 0.7741,
+              "best_view": 60,
+              "r_best": 0.7741
+            },
+            {
+              "frame": 90,
+              "r_same": 0.8532,
+              "best_view": 86,
+              "r_best": 0.8547
+            },
+            {
+              "frame": 120,
+              "r_same": 0.8188,
+              "best_view": 264,
+              "r_best": 0.8258
+            },
+            {
+              "frame": 150,
+              "r_same": 0.7116,
+              "best_view": 145,
+              "r_best": 0.7223
+            },
+            {
+              "frame": 180,
+              "r_same": 0.5457,
+              "best_view": 168,
+              "r_best": 0.567
+            },
+            {
+              "frame": 210,
+              "r_same": 0.5009,
+              "best_view": 231,
+              "r_best": 0.5271
+            },
+            {
+              "frame": 240,
+              "r_same": 0.7158,
+              "best_view": 246,
+              "r_best": 0.7251
+            },
+            {
+              "frame": 270,
+              "r_same": 0.8469,
+              "best_view": 268,
+              "r_best": 0.8491
+            },
+            {
+              "frame": 300,
+              "r_same": 0.769,
+              "best_view": 292,
+              "r_best": 0.7909
+            },
+            {
+              "frame": 330,
+              "r_same": 0.4884,
+              "best_view": 309,
+              "r_best": 0.565
+            }
+          ]
+        },
+        "s=-1 c=95 u=+1": {
+          "sign": -1.0,
+          "offset_degrees": 95.0,
+          "u_sign": 1.0,
+          "mean_r_at_same_view": 0.62377,
+          "mean_r_at_best_view": 0.66083,
+          "mean_abs_best_minus_frame": 42.33,
+          "hits_within_3_views": 1,
+          "frames": 12,
+          "per_frame": [
+            {
+              "frame": 0,
+              "r_same": 0.2385,
+              "best_view": 259,
+              "r_best": 0.337
+            },
+            {
+              "frame": 30,
+              "r_same": 0.2635,
+              "best_view": 46,
+              "r_best": 0.3819
+            },
+            {
+              "frame": 60,
+              "r_same": 0.7524,
+              "best_view": 58,
+              "r_best": 0.7541
+            },
+            {
+              "frame": 90,
+              "r_same": 0.8469,
+              "best_view": 84,
+              "r_best": 0.8552
+            },
+            {
+              "frame": 120,
+              "r_same": 0.8193,
+              "best_view": 266,
+              "r_best": 0.8271
+            },
+            {
+              "frame": 150,
+              "r_same": 0.7117,
+              "best_view": 144,
+              "r_best": 0.7325
+            },
+            {
+              "frame": 180,
+              "r_same": 0.548,
+              "best_view": 167,
+              "r_best": 0.5809
+            },
+            {
+              "frame": 210,
+              "r_same": 0.4965,
+              "best_view": 231,
+              "r_best": 0.5181
+            },
+            {
+              "frame": 240,
+              "r_same": 0.7011,
+              "best_view": 245,
+              "r_best": 0.7068
+            },
+            {
+              "frame": 270,
+              "r_same": 0.8426,
+              "best_view": 266,
+              "r_best": 0.8468
+            },
+            {
+              "frame": 300,
+              "r_same": 0.7694,
+              "best_view": 291,
+              "r_best": 0.8015
+            },
+            {
+              "frame": 330,
+              "r_same": 0.4952,
+              "best_view": 309,
+              "r_best": 0.5879
+            }
+          ]
+        },
+        "s=-1 c=98 u=+1": {
+          "sign": -1.0,
+          "offset_degrees": 97.5,
+          "u_sign": 1.0,
+          "mean_r_at_same_view": 0.61748,
+          "mean_r_at_best_view": 0.65984,
+          "mean_abs_best_minus_frame": 43.33,
+          "hits_within_3_views": 1,
+          "frames": 12,
+          "per_frame": [
+            {
+              "frame": 0,
+              "r_same": 0.2445,
+              "best_view": 259,
+              "r_best": 0.3512
+            },
+            {
+              "frame": 30,
+              "r_same": 0.2454,
+              "best_view": 46,
+              "r_best": 0.3485
+            },
+            {
+              "frame": 60,
+              "r_same": 0.7258,
+              "best_view": 57,
+              "r_best": 0.7318
+            },
+            {
+              "frame": 90,
+              "r_same": 0.8376,
+              "best_view": 81,
+              "r_best": 0.8551
+            },
+            {
+              "frame": 120,
+              "r_same": 0.8187,
+              "best_view": 113,
+              "r_best": 0.8298
+            },
+            {
+              "frame": 150,
+              "r_same": 0.7086,
+              "best_view": 296,
+              "r_best": 0.7453
+            },
+            {
+              "frame": 180,
+              "r_same": 0.5485,
+              "best_view": 166,
+              "r_best": 0.5944
+            },
+            {
+              "frame": 210,
+              "r_same": 0.493,
+              "best_view": 231,
+              "r_best": 0.5108
+            },
+            {
+              "frame": 240,
+              "r_same": 0.6844,
+              "best_view": 244,
+              "r_best": 0.6879
+            },
+            {
+              "frame": 270,
+              "r_same": 0.8364,
+              "best_view": 264,
+              "r_best": 0.842
+            },
+            {
+              "frame": 300,
+              "r_same": 0.7668,
+              "best_view": 289,
+              "r_best": 0.8105
+            },
+            {
+              "frame": 330,
+              "r_same": 0.5002,
+              "best_view": 306,
+              "r_best": 0.6108
+            }
+          ]
+        },
+        "s=-1 c=100 u=+1": {
+          "sign": -1.0,
+          "offset_degrees": 100.0,
+          "u_sign": 1.0,
+          "mean_r_at_same_view": 0.60971,
+          "mean_r_at_best_view": 0.65935,
+          "mean_abs_best_minus_frame": 52.5,
+          "hits_within_3_views": 0,
+          "frames": 12,
+          "per_frame": [
+            {
+              "frame": 0,
+              "r_same": 0.2501,
+              "best_view": 257,
+              "r_best": 0.3667
+            },
+            {
+              "frame": 30,
+              "r_same": 0.2279,
+              "best_view": 48,
+              "r_best": 0.3198
+            },
+            {
+              "frame": 60,
+              "r_same": 0.6949,
+              "best_view": 55,
+              "r_best": 0.7078
+            },
+            {
+              "frame": 90,
+              "r_same": 0.825,
+              "best_view": 79,
+              "r_best": 0.8541
+            },
+            {
+              "frame": 120,
+              "r_same": 0.8171,
+              "best_view": 111,
+              "r_best": 0.8331
+            },
+            {
+              "frame": 150,
+              "r_same": 0.7031,
+              "best_view": 295,
+              "r_best": 0.7587
+            },
+            {
+              "frame": 180,
+              "r_same": 0.5474,
+              "best_view": 164,
+              "r_best": 0.6082
+            },
+            {
+              "frame": 210,
+              "r_same": 0.4905,
+              "best_view": 302,
+              "r_best": 0.5057
+            },
+            {
+              "frame": 240,
+              "r_same": 0.6665,
+              "best_view": 244,
+              "r_best": 0.6687
+            },
+            {
+              "frame": 270,
+              "r_same": 0.8283,
+              "best_view": 261,
+              "r_best": 0.836
+            },
+            {
+              "frame": 300,
+              "r_same": 0.7622,
+              "best_view": 261,
+              "r_best": 0.8203
+            },
+            {
+              "frame": 330,
+              "r_same": 0.5036,
+              "best_view": 305,
+              "r_best": 0.6333
+            }
+          ]
+        }
+      }
+    }
+  }
+}

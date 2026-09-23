@@ -1,0 +1,1518 @@
+{
+  "data_root": "/root/autodl-tmp/workspace/Geometry-Aware-Attenuation-Learning-for-Sparse-View-CBCT-Reconstruction-main/dataset/thorax/syn_data_cbct_gt",
+  "step_mm": 1.0,
+  "mode": "variants",
+  "angle_convention": {
+    "sign": -1.0,
+    "offset_degrees": 90.0,
+    "u_sign": 1.0
+  },
+  "cases": {
+    "2026-06-04_065713": {
+      "geometry": {
+        "volume_resolution": [
+          248,
+          248,
+          120
+        ],
+        "declared_origin": [
+          -248.0,
+          -248.0,
+          -120.0
+        ],
+        "true_origin": [
+          -247.0,
+          -247.0,
+          -123.99053955078125
+        ],
+        "volume_phy": [
+          496.0,
+          496.0,
+          240.0
+        ],
+        "array_shape_zyx": [
+          120,
+          248,
+          248
+        ],
+        "sid": 1540.0,
+        "sad": 1000.0
+      },
+      "views": {
+        "90": {
+          "declared": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.65807,
+            "r_all": 0.85617,
+            "best_shift_dv": 3,
+            "best_shift_du": 11,
+            "r_body_at_best_shift": 0.70807,
+            "nrmse_at_best_scale": 0.25391,
+            "body_pixels": 31012
+          },
+          "true-origin": {
+            "axis": "zyx",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.70779,
+            "r_all": 0.86421,
+            "best_shift_dv": 1,
+            "best_shift_du": 8,
+            "r_body_at_best_shift": 0.73155,
+            "nrmse_at_best_scale": 0.23303,
+            "body_pixels": 31012
+          },
+          "z-only": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.70013,
+            "r_all": 0.8631,
+            "best_shift_dv": 1,
+            "best_shift_du": 9,
+            "r_body_at_best_shift": 0.72963,
+            "nrmse_at_best_scale": 0.23485,
+            "body_pixels": 31012
+          },
+          "tight-phy": {
+            "axis": "zyx",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              494.0,
+              494.0,
+              238.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.70489,
+            "r_all": 0.85859,
+            "best_shift_dv": 1,
+            "best_shift_du": 8,
+            "r_body_at_best_shift": 0.72991,
+            "nrmse_at_best_scale": 0.23496,
+            "body_pixels": 31012
+          },
+          "declared [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.34593,
+            "r_all": 0.69456,
+            "best_shift_dv": -31,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": 0.63043,
+            "nrmse_at_best_scale": 0.53129,
+            "body_pixels": 31012
+          },
+          "true-origin [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.3592,
+            "r_all": 0.70138,
+            "best_shift_dv": -35,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": 0.6585,
+            "nrmse_at_best_scale": 0.5289,
+            "body_pixels": 31012
+          },
+          "z-only [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -248.0,
+              -248.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.3515,
+            "r_all": 0.70023,
+            "best_shift_dv": -35,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": 0.65406,
+            "nrmse_at_best_scale": 0.52864,
+            "body_pixels": 31012
+          },
+          "tight-phy [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              494.0,
+              494.0,
+              238.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.35229,
+            "r_all": 0.69805,
+            "best_shift_dv": -36,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": 0.66317,
+            "nrmse_at_best_scale": 0.53153,
+            "body_pixels": 31012
+          },
+          "v-flip": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": true,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.58478,
+            "r_all": 0.7013,
+            "best_shift_dv": -36,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": 0.73638,
+            "nrmse_at_best_scale": 0.40716,
+            "body_pixels": 31012
+          },
+          "u-flip": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": true,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.57754,
+            "r_all": -0.67655,
+            "best_shift_dv": -44,
+            "best_shift_du": -44,
+            "r_body_at_best_shift": -0.16683,
+            "nrmse_at_best_scale": 0.96099,
+            "body_pixels": 31012
+          },
+          "no-half-fan": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": false,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.65742,
+            "r_all": -0.05483,
+            "best_shift_dv": -44,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": 0.3117,
+            "nrmse_at_best_scale": 0.63467,
+            "body_pixels": 31012
+          }
+        },
+        "110": {
+          "declared": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.49998,
+            "r_all": 0.83391,
+            "best_shift_dv": 11,
+            "best_shift_du": 32,
+            "r_body_at_best_shift": 0.71561,
+            "nrmse_at_best_scale": 0.28131,
+            "body_pixels": 29060
+          },
+          "true-origin": {
+            "axis": "zyx",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.56803,
+            "r_all": 0.84913,
+            "best_shift_dv": 8,
+            "best_shift_du": 30,
+            "r_body_at_best_shift": 0.71751,
+            "nrmse_at_best_scale": 0.25973,
+            "body_pixels": 29060
+          },
+          "z-only": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.55434,
+            "r_all": 0.84795,
+            "best_shift_dv": 8,
+            "best_shift_du": 32,
+            "r_body_at_best_shift": 0.7167,
+            "nrmse_at_best_scale": 0.26043,
+            "body_pixels": 29060
+          },
+          "tight-phy": {
+            "axis": "zyx",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              494.0,
+              494.0,
+              238.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.55984,
+            "r_all": 0.84602,
+            "best_shift_dv": 8,
+            "best_shift_du": 31,
+            "r_body_at_best_shift": 0.71134,
+            "nrmse_at_best_scale": 0.2586,
+            "body_pixels": 29060
+          },
+          "declared [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.32128,
+            "r_all": 0.62061,
+            "best_shift_dv": 28,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.36857,
+            "nrmse_at_best_scale": 0.52827,
+            "body_pixels": 29060
+          },
+          "true-origin [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.35696,
+            "r_all": 0.62814,
+            "best_shift_dv": 28,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.40098,
+            "nrmse_at_best_scale": 0.52468,
+            "body_pixels": 29060
+          },
+          "z-only [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -248.0,
+              -248.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.35727,
+            "r_all": 0.62866,
+            "best_shift_dv": 28,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.40461,
+            "nrmse_at_best_scale": 0.52226,
+            "body_pixels": 29060
+          },
+          "tight-phy [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              494.0,
+              494.0,
+              238.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.35611,
+            "r_all": 0.62816,
+            "best_shift_dv": 28,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.39534,
+            "nrmse_at_best_scale": 0.5228,
+            "body_pixels": 29060
+          },
+          "v-flip": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": true,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.48155,
+            "r_all": 0.70114,
+            "best_shift_dv": 30,
+            "best_shift_du": 29,
+            "r_body_at_best_shift": 0.71429,
+            "nrmse_at_best_scale": 0.4007,
+            "body_pixels": 29060
+          },
+          "u-flip": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": true,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.66139,
+            "r_all": -0.69174,
+            "best_shift_dv": -34,
+            "best_shift_du": -36,
+            "r_body_at_best_shift": -0.1898,
+            "nrmse_at_best_scale": 0.97406,
+            "body_pixels": 29060
+          },
+          "no-half-fan": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": false,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.30802,
+            "r_all": 0.10309,
+            "best_shift_dv": 44,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": -0.03269,
+            "nrmse_at_best_scale": 0.38139,
+            "body_pixels": 29060
+          }
+        },
+        "180": {
+          "declared": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.07976,
+            "r_all": 0.54104,
+            "best_shift_dv": 21,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.42636,
+            "nrmse_at_best_scale": 0.31218,
+            "body_pixels": 26871
+          },
+          "true-origin": {
+            "axis": "zyx",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.15154,
+            "r_all": 0.56487,
+            "best_shift_dv": 19,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.47153,
+            "nrmse_at_best_scale": 0.28709,
+            "body_pixels": 26871
+          },
+          "z-only": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.15882,
+            "r_all": 0.5639,
+            "best_shift_dv": 19,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.47747,
+            "nrmse_at_best_scale": 0.2853,
+            "body_pixels": 26871
+          },
+          "tight-phy": {
+            "axis": "zyx",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              494.0,
+              494.0,
+              238.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.17546,
+            "r_all": 0.5643,
+            "best_shift_dv": 18,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.48682,
+            "nrmse_at_best_scale": 0.28101,
+            "body_pixels": 26871
+          },
+          "declared [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.16909,
+            "r_all": 0.08944,
+            "best_shift_dv": 44,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.15322,
+            "nrmse_at_best_scale": 0.43231,
+            "body_pixels": 26871
+          },
+          "true-origin [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.20655,
+            "r_all": 0.11364,
+            "best_shift_dv": 44,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.17093,
+            "nrmse_at_best_scale": 0.43827,
+            "body_pixels": 26871
+          },
+          "z-only [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -248.0,
+              -248.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.20878,
+            "r_all": 0.10669,
+            "best_shift_dv": 44,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.171,
+            "nrmse_at_best_scale": 0.43876,
+            "body_pixels": 26871
+          },
+          "tight-phy [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              494.0,
+              494.0,
+              238.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.20821,
+            "r_all": 0.11711,
+            "best_shift_dv": 44,
+            "best_shift_du": 0,
+            "r_body_at_best_shift": 0.17697,
+            "nrmse_at_best_scale": 0.4383,
+            "body_pixels": 26871
+          },
+          "v-flip": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": true,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.1512,
+            "r_all": 0.45378,
+            "best_shift_dv": 44,
+            "best_shift_du": 1,
+            "r_body_at_best_shift": 0.30562,
+            "nrmse_at_best_scale": 0.39231,
+            "body_pixels": 26871
+          },
+          "u-flip": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": true,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.55413,
+            "r_all": -0.38005,
+            "best_shift_dv": 44,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": -0.06568,
+            "nrmse_at_best_scale": 0.70934,
+            "body_pixels": 26871
+          },
+          "no-half-fan": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": false,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.25316,
+            "r_all": -0.03463,
+            "best_shift_dv": 44,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": 0.15644,
+            "nrmse_at_best_scale": 0.37411,
+            "body_pixels": 26871
+          }
+        },
+        "270": {
+          "declared": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.55403,
+            "r_all": 0.84921,
+            "best_shift_dv": 4,
+            "best_shift_du": 15,
+            "r_body_at_best_shift": 0.7365,
+            "nrmse_at_best_scale": 0.2684,
+            "body_pixels": 29665
+          },
+          "true-origin": {
+            "axis": "zyx",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.5565,
+            "r_all": 0.85258,
+            "best_shift_dv": 2,
+            "best_shift_du": 16,
+            "r_body_at_best_shift": 0.73962,
+            "nrmse_at_best_scale": 0.25363,
+            "body_pixels": 29665
+          },
+          "z-only": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.57348,
+            "r_all": 0.85395,
+            "best_shift_dv": 1,
+            "best_shift_du": 15,
+            "r_body_at_best_shift": 0.73824,
+            "nrmse_at_best_scale": 0.25406,
+            "body_pixels": 29665
+          },
+          "tight-phy": {
+            "axis": "zyx",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              494.0,
+              494.0,
+              238.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.57945,
+            "r_all": 0.84948,
+            "best_shift_dv": 1,
+            "best_shift_du": 14,
+            "r_body_at_best_shift": 0.73612,
+            "nrmse_at_best_scale": 0.25403,
+            "body_pixels": 29665
+          },
+          "declared [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.18824,
+            "r_all": 0.8016,
+            "best_shift_dv": 13,
+            "best_shift_du": 28,
+            "r_body_at_best_shift": 0.3694,
+            "nrmse_at_best_scale": 0.40772,
+            "body_pixels": 29665
+          },
+          "true-origin [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.20478,
+            "r_all": 0.80345,
+            "best_shift_dv": 9,
+            "best_shift_du": 28,
+            "r_body_at_best_shift": 0.39862,
+            "nrmse_at_best_scale": 0.39649,
+            "body_pixels": 29665
+          },
+          "z-only [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -248.0,
+              -248.0,
+              -123.9905
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.2065,
+            "r_all": 0.80629,
+            "best_shift_dv": 9,
+            "best_shift_du": 27,
+            "r_body_at_best_shift": 0.39146,
+            "nrmse_at_best_scale": 0.39628,
+            "body_pixels": 29665
+          },
+          "tight-phy [xyz]": {
+            "axis": "xyz",
+            "origin": [
+              -247.0,
+              -247.0,
+              -123.9905
+            ],
+            "phy": [
+              494.0,
+              494.0,
+              238.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              248,
+              248,
+              120
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.23352,
+            "r_all": 0.8027,
+            "best_shift_dv": 8,
+            "best_shift_du": 27,
+            "r_body_at_best_shift": 0.42172,
+            "nrmse_at_best_scale": 0.39405,
+            "body_pixels": 29665
+          },
+          "v-flip": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": false,
+            "flip_v": true,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": 0.43213,
+            "r_all": 0.82436,
+            "best_shift_dv": 11,
+            "best_shift_du": 19,
+            "r_body_at_best_shift": 0.61798,
+            "nrmse_at_best_scale": 0.30732,
+            "body_pixels": 29665
+          },
+          "u-flip": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": true,
+            "flip_u": true,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.58456,
+            "r_all": -0.79806,
+            "best_shift_dv": 44,
+            "best_shift_du": -26,
+            "r_body_at_best_shift": -0.4953,
+            "nrmse_at_best_scale": 0.85071,
+            "body_pixels": 29665
+          },
+          "no-half-fan": {
+            "axis": "zyx",
+            "origin": [
+              -248.0,
+              -248.0,
+              -120.0
+            ],
+            "phy": [
+              496.0,
+              496.0,
+              240.0
+            ],
+            "use_offset": false,
+            "flip_u": false,
+            "flip_v": false,
+            "volume_input_shape": [
+              120,
+              248,
+              248
+            ],
+            "volume_expected_shape": [
+              248,
+              248,
+              120
+            ],
+            "r_body": -0.31646,
+            "r_all": -0.2566,
+            "best_shift_dv": 32,
+            "best_shift_du": 44,
+            "r_body_at_best_shift": -0.03873,
+            "nrmse_at_best_scale": 0.6224,
+            "body_pixels": 29665
+          }
+        }
+      },
+      "mean_r_body": {
+        "tight-phy": 0.50491,
+        "z-only": 0.49669,
+        "true-origin": 0.49596,
+        "declared": 0.44796,
+        "v-flip": 0.33681,
+        "tight-phy [xyz]": 0.18343,
+        "true-origin [xyz]": 0.1786,
+        "z-only [xyz]": 0.17662,
+        "declared [xyz]": 0.17159,
+        "no-half-fan": -0.38377,
+        "u-flip": -0.59441
+      }
+    }
+  }
+}

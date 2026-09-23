@@ -1,0 +1,126 @@
+{
+  "data_root": "/root/autodl-tmp/workspace/Geometry-Aware-Attenuation-Learning-for-Sparse-View-CBCT-Reconstruction-main/dataset/thorax/syn_data_cbct_gt",
+  "step_mm": 1.0,
+  "mode": "convention-equivalence",
+  "angle_convention": {
+    "sign": 1.0,
+    "offset_degrees": 0.0,
+    "u_sign": 1.0
+  },
+  "cases": {
+    "2026-06-04_065713": {
+      "geometry": {
+        "volume_resolution": [
+          248,
+          248,
+          120
+        ],
+        "declared_origin": [
+          -248.0,
+          -248.0,
+          -120.0
+        ],
+        "true_origin": [
+          -247.0,
+          -247.0,
+          -123.99053955078125
+        ],
+        "volume_phy": [
+          496.0,
+          496.0,
+          240.0
+        ],
+        "array_shape_zyx": [
+          120,
+          248,
+          248
+        ],
+        "sid": 1540.0,
+        "sad": 1000.0
+      },
+      "views": {},
+      "convention_equivalence": {
+        "frames_compared": 360,
+        "max_abs_diff_a_vs_b": 0.0,
+        "identical": true,
+        "max_abs_diff_varian_vs_stored": 1414.211988
+      }
+    },
+    "2026-06-04_081709": {
+      "geometry": {
+        "volume_resolution": [
+          248,
+          248,
+          108
+        ],
+        "declared_origin": [
+          -248.0,
+          -248.0,
+          -108.0
+        ],
+        "true_origin": [
+          -247.0,
+          -247.0,
+          -123.96782684326172
+        ],
+        "volume_phy": [
+          496.0,
+          496.0,
+          216.0
+        ],
+        "array_shape_zyx": [
+          108,
+          248,
+          248
+        ],
+        "sid": 1540.0,
+        "sad": 1000.0
+      },
+      "views": {},
+      "convention_equivalence": {
+        "frames_compared": 360,
+        "max_abs_diff_a_vs_b": 0.0,
+        "identical": true,
+        "max_abs_diff_varian_vs_stored": 1414.20445
+      }
+    },
+    "2026-06-04_073533": {
+      "geometry": {
+        "volume_resolution": [
+          248,
+          248,
+          108
+        ],
+        "declared_origin": [
+          -248.0,
+          -248.0,
+          -108.0
+        ],
+        "true_origin": [
+          -247.0,
+          -247.0,
+          -122.96971893310547
+        ],
+        "volume_phy": [
+          496.0,
+          496.0,
+          216.0
+        ],
+        "array_shape_zyx": [
+          108,
+          248,
+          248
+        ],
+        "sid": 1540.0,
+        "sad": 1000.0
+      },
+      "views": {},
+      "convention_equivalence": {
+        "frames_compared": 360,
+        "max_abs_diff_a_vs_b": 0.0,
+        "identical": true,
+        "max_abs_diff_varian_vs_stored": 1414.213538
+      }
+    }
+  }
+}

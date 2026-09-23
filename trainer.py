@@ -89,6 +89,9 @@ class trainer():
             and args.pretrained_decoder
             and (args.use_adapter or args.use_prior_completion)
         )
+        # Kept so --resume_reload_decoder can re-inject the prior after load_ckpt;
+        # train.py skips --pretrained_decoder entirely whenever --resume is set.
+        self.pretrained_decoder_path = args.pretrained_decoder
         self.decoder_lr_factor = args.decoder_lr_factor
         self.adapter_lr_factor = args.adapter_lr_factor
         self.stage0_decoder_lr_factor = args.stage0_decoder_lr_factor
@@ -306,6 +309,10 @@ class trainer():
         self.lr_decay_restart = bool(getattr(args, "lr_decay_restart", False))
         # Epoch the LR decay is counted from; updated to the resumed epoch below.
         self.lr_decay_origin = 0
+        # Epoch the four-phase schedule counts from. It must exist before
+        # LambdaLR is built below, because LambdaLR evaluates the lambdas once
+        # during construction. Only --phase_restart moves it off 0.
+        self.phase_origin = 0
         encoder_late_parameters = []
         encoder_early_parameters = []
         for name, parameter in self.G_render.encoder.named_parameters():
@@ -361,15 +368,53 @@ class trainer():
         self.history_model_path = "%s/ckpt_history/ckpt_" % (self.checkpoints_path,)# 按 epoch 归档的历史权重
         if args.resume: 
             self.load_ckpt(self.resume_name)    # 断电加载
+            if getattr(args, "resume_reload_decoder", False):
+                self._reload_pretrained_decoder()
+        if getattr(args, "phase_restart", False):
+            # Replay the whole A/B/C/D schedule from the resumed epoch. Every phase
+            # boundary is expressed as an absolute epoch, so re-anchor the timeline
+            # and recompute the Phase-D remainder against the new end point.
+            self.phase_origin = self.begin_epochs
+            phase_budget = sum((
+                self.phase_a_epochs, self.phase_b_epochs,
+                self.completion_phase_epochs, self.phase_c_epochs,
+                self.phase_c_hold_epochs,
+            ))
+            self.phase_d_epochs = self.num_epochs - self.phase_origin - phase_budget
+            if (
+                self.use_four_phase
+                and self.transfer_schedule == "four_phase"
+                and self.phase_d_epochs <= 0
+            ):
+                raise ValueError(
+                    "--phase_restart 之后 Phase D 没有剩余 epoch："
+                    f"重放 A/B/C 需要 {phase_budget} 轮，从 epoch {self.phase_origin} 起"
+                    f"至少要 --epochs > {self.phase_origin + phase_budget}。"
+                )
+            if not self.lr_decay_restart:
+                warnings.warn(
+                    "--phase_restart 重放了阶段表，但没有同时传 --lr-decay-restart，"
+                    "LR 仍按从 epoch 0 起的衰减走（会低很多）。通常两者要一起用。",
+                    stacklevel=2,
+                )
         if self.lr_decay_restart:
             # A resumed run restarts the decay schedule, so it trains at the full
             # base LR instead of continuing from 0.5**(epoch//step_size).
             self.lr_decay_origin = self.begin_epochs
         self._apply_training_stage(self.begin_epochs)
 
+    def _schedule_epoch(self, epoch):
+        """Map an absolute epoch onto the A/B/C/D schedule timeline.
+
+        The schedule normally starts at epoch 0. With --phase_restart a resumed run
+        replays the full schedule, so the resumed epoch becomes the new origin.
+        """
+        return epoch - self.phase_origin
+
     def _training_stage(self, epoch):
         if not self.use_four_phase:
             return 0
+        epoch = self._schedule_epoch(epoch)
         if self.transfer_schedule == "legacy_three_stage":
             if epoch < self.legacy_stage1_epochs:
                 return 6
@@ -499,6 +544,7 @@ class trainer():
         """1=output, 2=last up block, 3=earlier up blocks, 4=residual core."""
         if self.phase_c_epochs <= 0:
             return 4
+        epoch = self._schedule_epoch(epoch)
         phase_start = self.phase_a_epochs + self.phase_b_epochs
         phase_start += self.completion_phase_epochs
         progress = (epoch - phase_start) / max(1, self.phase_c_epochs)
@@ -508,6 +554,8 @@ class trainer():
         if self.prior_stem is None or self.latent_lambda <= 0:
             return 0.0
         stage = self._training_stage(epoch)
+        # The index arithmetic below is relative to the schedule origin.
+        epoch = self._schedule_epoch(epoch)
         if stage == 6:
             return self.latent_lambda
         if stage == 7:
@@ -567,6 +615,8 @@ class trainer():
         if not self.use_prior_completion or self.completion_residual_lambda <= 0:
             return 0.0
         stage = self._training_stage(epoch)
+        # The index arithmetic below is relative to the schedule origin.
+        epoch = self._schedule_epoch(epoch)
         if stage == 6:
             return self.completion_residual_lambda
         if stage == 7:
@@ -1024,6 +1074,38 @@ class trainer():
         torch.save(data, self.latest_model_path)
         if (epoch % self.save_interval == 0) or epoch == self.num_epochs - 1:
             torch.save(data, self.history_model_path + str(epoch))
+
+    def _reload_pretrained_decoder(self):
+        """Re-inject the decoder prior on top of a resumed checkpoint.
+
+        train.py skips --pretrained_decoder whenever --resume is set, so a resumed
+        run would otherwise keep the decoder the checkpoint carries. Clearing the
+        decoder Adam moments is part of the reset: they were estimated for the
+        weights being overwritten.
+        """
+        if not self.pretrained_decoder_path:
+            raise ValueError(
+                "--resume_reload_decoder 需要同时传 --pretrained_decoder 指向解码器预训练权重"
+            )
+        pretrained = torch.load(self.pretrained_decoder_path, map_location="cpu")
+        if "decoder" not in pretrained:
+            raise KeyError(
+                f"Decoder pretraining checkpoint {self.pretrained_decoder_path!r} "
+                "has no 'decoder' key."
+            )
+        self.G_render.decoder.load_state_dict(pretrained["decoder"], strict=True)
+        del pretrained
+        cleared = 0
+        for group in self.G_optim.param_groups:
+            if not group.get("name", "").startswith("decoder_"):
+                continue
+            for parameter in group["params"]:
+                if self.G_optim.state.pop(parameter, None) is not None:
+                    cleared += 1
+        print(
+            f"Reloaded pretrained decoder from: {self.pretrained_decoder_path} "
+            f"(cleared Adam state for {cleared} decoder tensors)"
+        )
 
     def load_ckpt(self, resume_name=None):
         data = None

@@ -2,9 +2,14 @@ import numpy as np
 import torch.nn.functional as F
 import torch
 
-def angle2vec(PrimaryAngle, SecondaryAngle, isocenter, sid, sad, proj_spacing_x, proj_spacing_y):
+def angle2vec(PrimaryAngle, SecondaryAngle, isocenter, sid, sad, proj_spacing_x, proj_spacing_y,
+              detector_offset_u=0.0, detector_offset_v=0.0):
     # input: PrimaryAngle, SecondaryAngle in rad
     # output: vec [12]
+    #
+    # detector_offset_u / detector_offset_v 是 half-fan（半扇）扫描的平板横向/纵向偏移，
+    # 单位 mm，默认为 0。这两个参数默认值保持历史行为，dental/spine 的 DRR_simulation
+    # 不受影响；只有真实扫描数据（ImagerLat 非零）才需要显式传入。
 
     cam_x = isocenter[0] + sad * np.cos(SecondaryAngle) * np.cos(PrimaryAngle)
     cam_y = isocenter[1] + sad * np.cos(SecondaryAngle) * np.sin(PrimaryAngle)
@@ -26,6 +31,13 @@ def angle2vec(PrimaryAngle, SecondaryAngle, isocenter, sid, sad, proj_spacing_x,
 
     u_vector = np.array([u_x, u_y, u_z])
     v_vector = np.array([v_x, v_y, v_z])
+
+    if detector_offset_u or detector_offset_v:
+        # proj_spacing 已经把长度烘进 u/v 向量，这里用方向单位向量施加偏移，
+        # 与 tools/thorax_preprocessing.projection_io.angle_to_vec 的约定一致。
+        u_unit = u_vector / np.linalg.norm(u_vector)
+        v_unit = v_vector / np.linalg.norm(v_vector)
+        det = det + detector_offset_u * u_unit + detector_offset_v * v_unit
 
     vec = np.concatenate([cam, det, u_vector, v_vector])
     return vec

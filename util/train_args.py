@@ -54,6 +54,26 @@ def parse_args():
             "decaying across the resume and epoch 199 runs at 1/8 of init_lr."
         ),
     )
+    parser.add_argument(
+        "--phase_restart",
+        action="store_true",
+        help=(
+            "Re-anchor the four-phase schedule to the resumed epoch and replay the whole "
+            "A/B/C/D schedule. The schedule is keyed on absolute epochs, so resuming a "
+            "200-epoch run at epoch 200 would otherwise land straight in Phase D. Pair it "
+            "with --lr-decay-restart and raise --epochs by the full schedule length."
+        ),
+    )
+    parser.add_argument(
+        "--resume_reload_decoder",
+        action="store_true",
+        help=(
+            "After --resume restores the checkpoint, overwrite the decoder with the "
+            "--pretrained_decoder weights again. train.py skips --pretrained_decoder "
+            "whenever --resume is set, so without this flag a resumed run keeps the "
+            "checkpoint's (possibly drifted) decoder and the prior is not re-injected."
+        ),
+    )
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | thorax | Walnuts")
     parser.add_argument(
         "--require-gt-source",
@@ -368,6 +388,8 @@ def parse_args():
                      'lr_step_size: ', str(args.lr_step_size), '\n' ,
                      'lr_gamma: ', str(args.lr_gamma), '\n' ,
                      'lr_decay_restart: ', "yes" if args.lr_decay_restart else "no", '\n' ,
+                     'phase_restart: ', "yes" if args.phase_restart else "no", '\n' ,
+                     'resume_reload_decoder: ', "yes" if args.resume_reload_decoder else "no", '\n' ,
                      'stage0_decoder_lr_factor: ', str(args.stage0_decoder_lr_factor), '\n' ,
                      'start scanning angle: ', str(args.start), '\n',
                      'end scanning angle: ', str(args.end), '\n',

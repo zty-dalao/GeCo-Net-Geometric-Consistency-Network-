@@ -1,0 +1,1558 @@
+{
+  "data_root": "/root/autodl-tmp/workspace/Geometry-Aware-Attenuation-Learning-for-Sparse-View-CBCT-Reconstruction-main/dataset/thorax/syn_data_cbct_gt",
+  "step_mm": 1.0,
+  "mode": "correspondence",
+  "angle_convention": {
+    "sign": -1.0,
+    "offset_degrees": 90.0,
+    "u_sign": 1.0
+  },
+  "cases": {
+    "2026-06-04_065713": {
+      "geometry": {
+        "volume_resolution": [
+          248,
+          248,
+          120
+        ],
+        "declared_origin": [
+          -248.0,
+          -248.0,
+          -120.0
+        ],
+        "true_origin": [
+          -247.0,
+          -247.0,
+          -123.99053955078125
+        ],
+        "volume_phy": [
+          496.0,
+          496.0,
+          240.0
+        ],
+        "array_shape_zyx": [
+          120,
+          248,
+          248
+        ],
+        "sid": 1540.0,
+        "sad": 1000.0
+      },
+      "views": {},
+      "correspondence": {
+        "0": {
+          "nominal_angle_degrees": 0.0,
+          "angle_degrees": 0.3176598029023694,
+          "best_view": 266,
+          "r_at_best_view": 0.31405,
+          "r_at_same_view": 0.22562,
+          "top3": [
+            {
+              "view": 266,
+              "r": 0.31405
+            },
+            {
+              "view": 264,
+              "r": 0.31372
+            },
+            {
+              "view": 261,
+              "r": 0.31363
+            }
+          ]
+        },
+        "5": {
+          "nominal_angle_degrees": 5.0,
+          "angle_degrees": 5.188168356160418,
+          "best_view": 266,
+          "r_at_best_view": 0.29995,
+          "r_at_same_view": 0.20691,
+          "top3": [
+            {
+              "view": 266,
+              "r": 0.29995
+            },
+            {
+              "view": 267,
+              "r": 0.29963
+            },
+            {
+              "view": 264,
+              "r": 0.29943
+            }
+          ]
+        },
+        "10": {
+          "nominal_angle_degrees": 10.0,
+          "angle_degrees": 10.03676539279985,
+          "best_view": 266,
+          "r_at_best_view": 0.29462,
+          "r_at_same_view": 0.19313,
+          "top3": [
+            {
+              "view": 266,
+              "r": 0.29462
+            },
+            {
+              "view": 264,
+              "r": 0.29438
+            },
+            {
+              "view": 267,
+              "r": 0.29431
+            }
+          ]
+        },
+        "15": {
+          "nominal_angle_degrees": 15.0,
+          "angle_degrees": 14.908852499378042,
+          "best_view": 257,
+          "r_at_best_view": 0.30018,
+          "r_at_same_view": 0.18318,
+          "top3": [
+            {
+              "view": 257,
+              "r": 0.30018
+            },
+            {
+              "view": 258,
+              "r": 0.29993
+            },
+            {
+              "view": 259,
+              "r": 0.2999
+            }
+          ]
+        },
+        "20": {
+          "nominal_angle_degrees": 20.0,
+          "angle_degrees": 19.779653260430223,
+          "best_view": 256,
+          "r_at_best_view": 0.31705,
+          "r_at_same_view": 0.19527,
+          "top3": [
+            {
+              "view": 256,
+              "r": 0.31705
+            },
+            {
+              "view": 257,
+              "r": 0.31671
+            },
+            {
+              "view": 255,
+              "r": 0.31637
+            }
+          ]
+        },
+        "25": {
+          "nominal_angle_degrees": 25.0,
+          "angle_degrees": 24.651132566614024,
+          "best_view": 46,
+          "r_at_best_view": 0.37277,
+          "r_at_same_view": 0.23124,
+          "top3": [
+            {
+              "view": 46,
+              "r": 0.37277
+            },
+            {
+              "view": 45,
+              "r": 0.37258
+            },
+            {
+              "view": 47,
+              "r": 0.3721
+            }
+          ]
+        },
+        "30": {
+          "nominal_angle_degrees": 30.0,
+          "angle_degrees": 30.313572987031876,
+          "best_view": 46,
+          "r_at_best_view": 0.45339,
+          "r_at_same_view": 0.29812,
+          "top3": [
+            {
+              "view": 46,
+              "r": 0.45339
+            },
+            {
+              "view": 47,
+              "r": 0.45287
+            },
+            {
+              "view": 45,
+              "r": 0.45269
+            }
+          ]
+        },
+        "35": {
+          "nominal_angle_degrees": 35.0,
+          "angle_degrees": 35.18624972270669,
+          "best_view": 47,
+          "r_at_best_view": 0.52325,
+          "r_at_same_view": 0.39832,
+          "top3": [
+            {
+              "view": 47,
+              "r": 0.52325
+            },
+            {
+              "view": 48,
+              "r": 0.52309
+            },
+            {
+              "view": 49,
+              "r": 0.52197
+            }
+          ]
+        },
+        "40": {
+          "nominal_angle_degrees": 40.0,
+          "angle_degrees": 40.05768810986331,
+          "best_view": 49,
+          "r_at_best_view": 0.58895,
+          "r_at_same_view": 0.51354,
+          "top3": [
+            {
+              "view": 49,
+              "r": 0.58895
+            },
+            {
+              "view": 50,
+              "r": 0.58853
+            },
+            {
+              "view": 48,
+              "r": 0.58813
+            }
+          ]
+        },
+        "45": {
+          "nominal_angle_degrees": 45.0,
+          "angle_degrees": 44.92994470806701,
+          "best_view": 51,
+          "r_at_best_view": 0.64854,
+          "r_at_same_view": 0.60969,
+          "top3": [
+            {
+              "view": 51,
+              "r": 0.64854
+            },
+            {
+              "view": 52,
+              "r": 0.64833
+            },
+            {
+              "view": 53,
+              "r": 0.64742
+            }
+          ]
+        },
+        "50": {
+          "nominal_angle_degrees": 50.0,
+          "angle_degrees": 49.77522751391132,
+          "best_view": 55,
+          "r_at_best_view": 0.70205,
+          "r_at_same_view": 0.68394,
+          "top3": [
+            {
+              "view": 55,
+              "r": 0.70205
+            },
+            {
+              "view": 54,
+              "r": 0.70134
+            },
+            {
+              "view": 53,
+              "r": 0.70034
+            }
+          ]
+        },
+        "55": {
+          "nominal_angle_degrees": 55.0,
+          "angle_degrees": 54.65145223492709,
+          "best_view": 58,
+          "r_at_best_view": 0.74837,
+          "r_at_same_view": 0.74134,
+          "top3": [
+            {
+              "view": 58,
+              "r": 0.74837
+            },
+            {
+              "view": 57,
+              "r": 0.74787
+            },
+            {
+              "view": 59,
+              "r": 0.74784
+            }
+          ]
+        },
+        "60": {
+          "nominal_angle_degrees": 60.0,
+          "angle_degrees": 60.33100676816605,
+          "best_view": 62,
+          "r_at_best_view": 0.79146,
+          "r_at_same_view": 0.78994,
+          "top3": [
+            {
+              "view": 62,
+              "r": 0.79146
+            },
+            {
+              "view": 63,
+              "r": 0.79118
+            },
+            {
+              "view": 61,
+              "r": 0.79116
+            }
+          ]
+        },
+        "65": {
+          "nominal_angle_degrees": 65.0,
+          "angle_degrees": 65.19233760619034,
+          "best_view": 65,
+          "r_at_best_view": 0.8182,
+          "r_at_same_view": 0.8182,
+          "top3": [
+            {
+              "view": 65,
+              "r": 0.8182
+            },
+            {
+              "view": 66,
+              "r": 0.818
+            },
+            {
+              "view": 67,
+              "r": 0.81747
+            }
+          ]
+        },
+        "70": {
+          "nominal_angle_degrees": 70.0,
+          "angle_degrees": 70.04241558314129,
+          "best_view": 69,
+          "r_at_best_view": 0.83597,
+          "r_at_same_view": 0.83573,
+          "top3": [
+            {
+              "view": 69,
+              "r": 0.83597
+            },
+            {
+              "view": 70,
+              "r": 0.83573
+            },
+            {
+              "view": 71,
+              "r": 0.83476
+            }
+          ]
+        },
+        "75": {
+          "nominal_angle_degrees": 75.0,
+          "angle_degrees": 74.68933294530905,
+          "best_view": 73,
+          "r_at_best_view": 0.84681,
+          "r_at_same_view": 0.84671,
+          "top3": [
+            {
+              "view": 73,
+              "r": 0.84681
+            },
+            {
+              "view": 74,
+              "r": 0.84673
+            },
+            {
+              "view": 75,
+              "r": 0.84671
+            }
+          ]
+        },
+        "80": {
+          "nominal_angle_degrees": 80.0,
+          "angle_degrees": 79.92402477445404,
+          "best_view": 79,
+          "r_at_best_view": 0.8541,
+          "r_at_same_view": 0.85338,
+          "top3": [
+            {
+              "view": 79,
+              "r": 0.8541
+            },
+            {
+              "view": 78,
+              "r": 0.85354
+            },
+            {
+              "view": 80,
+              "r": 0.85338
+            }
+          ]
+        },
+        "85": {
+          "nominal_angle_degrees": 85.0,
+          "angle_degrees": 84.9379101624304,
+          "best_view": 84,
+          "r_at_best_view": 0.85523,
+          "r_at_same_view": 0.85451,
+          "top3": [
+            {
+              "view": 84,
+              "r": 0.85523
+            },
+            {
+              "view": 83,
+              "r": 0.85508
+            },
+            {
+              "view": 85,
+              "r": 0.85451
+            }
+          ]
+        },
+        "90": {
+          "nominal_angle_degrees": 90.0,
+          "angle_degrees": 89.99994389607355,
+          "best_view": 90,
+          "r_at_best_view": 0.85617,
+          "r_at_same_view": 0.85617,
+          "top3": [
+            {
+              "view": 90,
+              "r": 0.85617
+            },
+            {
+              "view": 88,
+              "r": 0.85326
+            },
+            {
+              "view": 89,
+              "r": 0.85321
+            }
+          ]
+        },
+        "95": {
+          "nominal_angle_degrees": 95.0,
+          "angle_degrees": 94.9837663537694,
+          "best_view": 90,
+          "r_at_best_view": 0.85075,
+          "r_at_same_view": 0.84625,
+          "top3": [
+            {
+              "view": 90,
+              "r": 0.85075
+            },
+            {
+              "view": 92,
+              "r": 0.8472
+            },
+            {
+              "view": 93,
+              "r": 0.84715
+            }
+          ]
+        },
+        "100": {
+          "nominal_angle_degrees": 100.0,
+          "angle_degrees": 99.93455140467898,
+          "best_view": 99,
+          "r_at_best_view": 0.84315,
+          "r_at_same_view": 0.843,
+          "top3": [
+            {
+              "view": 99,
+              "r": 0.84315
+            },
+            {
+              "view": 98,
+              "r": 0.84302
+            },
+            {
+              "view": 100,
+              "r": 0.843
+            }
+          ]
+        },
+        "105": {
+          "nominal_angle_degrees": 105.0,
+          "angle_degrees": 105.12661147556621,
+          "best_view": 105,
+          "r_at_best_view": 0.8395,
+          "r_at_same_view": 0.8395,
+          "top3": [
+            {
+              "view": 105,
+              "r": 0.8395
+            },
+            {
+              "view": 106,
+              "r": 0.83931
+            },
+            {
+              "view": 107,
+              "r": 0.83886
+            }
+          ]
+        },
+        "110": {
+          "nominal_angle_degrees": 110.0,
+          "angle_degrees": 109.70438973831014,
+          "best_view": 110,
+          "r_at_best_view": 0.83391,
+          "r_at_same_view": 0.83391,
+          "top3": [
+            {
+              "view": 110,
+              "r": 0.83391
+            },
+            {
+              "view": 111,
+              "r": 0.83383
+            },
+            {
+              "view": 109,
+              "r": 0.83357
+            }
+          ]
+        },
+        "115": {
+          "nominal_angle_degrees": 115.0,
+          "angle_degrees": 115.39206114887395,
+          "best_view": 266,
+          "r_at_best_view": 0.82712,
+          "r_at_same_view": 0.82563,
+          "top3": [
+            {
+              "view": 266,
+              "r": 0.82712
+            },
+            {
+              "view": 264,
+              "r": 0.82675
+            },
+            {
+              "view": 265,
+              "r": 0.82672
+            }
+          ]
+        },
+        "120": {
+          "nominal_angle_degrees": 120.0,
+          "angle_degrees": 120.26413656012667,
+          "best_view": 264,
+          "r_at_best_view": 0.82323,
+          "r_at_same_view": 0.81631,
+          "top3": [
+            {
+              "view": 264,
+              "r": 0.82323
+            },
+            {
+              "view": 263,
+              "r": 0.8228
+            },
+            {
+              "view": 265,
+              "r": 0.82277
+            }
+          ]
+        },
+        "125": {
+          "nominal_angle_degrees": 125.0,
+          "angle_degrees": 125.11246476793346,
+          "best_view": 261,
+          "r_at_best_view": 0.81363,
+          "r_at_same_view": 0.80523,
+          "top3": [
+            {
+              "view": 261,
+              "r": 0.81363
+            },
+            {
+              "view": 262,
+              "r": 0.81359
+            },
+            {
+              "view": 263,
+              "r": 0.81347
+            }
+          ]
+        },
+        "130": {
+          "nominal_angle_degrees": 130.0,
+          "angle_degrees": 129.98497202951688,
+          "best_view": 289,
+          "r_at_best_view": 0.79923,
+          "r_at_same_view": 0.7898,
+          "top3": [
+            {
+              "view": 289,
+              "r": 0.79923
+            },
+            {
+              "view": 290,
+              "r": 0.79916
+            },
+            {
+              "view": 288,
+              "r": 0.79869
+            }
+          ]
+        },
+        "135": {
+          "nominal_angle_degrees": 135.0,
+          "angle_degrees": 134.8576902920719,
+          "best_view": 291,
+          "r_at_best_view": 0.783,
+          "r_at_same_view": 0.77263,
+          "top3": [
+            {
+              "view": 291,
+              "r": 0.783
+            },
+            {
+              "view": 292,
+              "r": 0.78292
+            },
+            {
+              "view": 293,
+              "r": 0.78241
+            }
+          ]
+        },
+        "140": {
+          "nominal_angle_degrees": 140.0,
+          "angle_degrees": 139.72999947540467,
+          "best_view": 295,
+          "r_at_best_view": 0.76139,
+          "r_at_same_view": 0.75322,
+          "top3": [
+            {
+              "view": 295,
+              "r": 0.76139
+            },
+            {
+              "view": 294,
+              "r": 0.7612
+            },
+            {
+              "view": 293,
+              "r": 0.76047
+            }
+          ]
+        },
+        "145": {
+          "nominal_angle_degrees": 145.0,
+          "angle_degrees": 145.39236927966954,
+          "best_view": 144,
+          "r_at_best_view": 0.73212,
+          "r_at_same_view": 0.7308,
+          "top3": [
+            {
+              "view": 144,
+              "r": 0.73212
+            },
+            {
+              "view": 143,
+              "r": 0.73162
+            },
+            {
+              "view": 298,
+              "r": 0.73147
+            }
+          ]
+        },
+        "150": {
+          "nominal_angle_degrees": 150.0,
+          "angle_degrees": 150.26709779391214,
+          "best_view": 147,
+          "r_at_best_view": 0.71083,
+          "r_at_same_view": 0.70749,
+          "top3": [
+            {
+              "view": 147,
+              "r": 0.71083
+            },
+            {
+              "view": 146,
+              "r": 0.71054
+            },
+            {
+              "view": 148,
+              "r": 0.71047
+            }
+          ]
+        },
+        "155": {
+          "nominal_angle_degrees": 155.0,
+          "angle_degrees": 155.1395349595245,
+          "best_view": 152,
+          "r_at_best_view": 0.68717,
+          "r_at_same_view": 0.68425,
+          "top3": [
+            {
+              "view": 152,
+              "r": 0.68717
+            },
+            {
+              "view": 153,
+              "r": 0.68712
+            },
+            {
+              "view": 151,
+              "r": 0.68712
+            }
+          ]
+        },
+        "160": {
+          "nominal_angle_degrees": 160.0,
+          "angle_degrees": 160.01297785883358,
+          "best_view": 156,
+          "r_at_best_view": 0.66402,
+          "r_at_same_view": 0.65761,
+          "top3": [
+            {
+              "view": 156,
+              "r": 0.66402
+            },
+            {
+              "view": 157,
+              "r": 0.66382
+            },
+            {
+              "view": 155,
+              "r": 0.66379
+            }
+          ]
+        },
+        "165": {
+          "nominal_angle_degrees": 165.0,
+          "angle_degrees": 164.86049958014235,
+          "best_view": 159,
+          "r_at_best_view": 0.63836,
+          "r_at_same_view": 0.63028,
+          "top3": [
+            {
+              "view": 159,
+              "r": 0.63836
+            },
+            {
+              "view": 158,
+              "r": 0.63833
+            },
+            {
+              "view": 160,
+              "r": 0.63785
+            }
+          ]
+        },
+        "170": {
+          "nominal_angle_degrees": 170.0,
+          "angle_degrees": 169.73211914840522,
+          "best_view": 164,
+          "r_at_best_view": 0.61112,
+          "r_at_same_view": 0.60117,
+          "top3": [
+            {
+              "view": 164,
+              "r": 0.61112
+            },
+            {
+              "view": 163,
+              "r": 0.61112
+            },
+            {
+              "view": 165,
+              "r": 0.61068
+            }
+          ]
+        },
+        "175": {
+          "nominal_angle_degrees": 175.0,
+          "angle_degrees": 174.603773159723,
+          "best_view": 167,
+          "r_at_best_view": 0.58453,
+          "r_at_same_view": 0.57203,
+          "top3": [
+            {
+              "view": 167,
+              "r": 0.58453
+            },
+            {
+              "view": 166,
+              "r": 0.58406
+            },
+            {
+              "view": 168,
+              "r": 0.58398
+            }
+          ]
+        },
+        "180": {
+          "nominal_angle_degrees": 180.0,
+          "angle_degrees": 180.26766292378593,
+          "best_view": 169,
+          "r_at_best_view": 0.55339,
+          "r_at_same_view": 0.54104,
+          "top3": [
+            {
+              "view": 169,
+              "r": 0.55339
+            },
+            {
+              "view": 168,
+              "r": 0.55325
+            },
+            {
+              "view": 170,
+              "r": 0.55325
+            }
+          ]
+        },
+        "185": {
+          "nominal_angle_degrees": 185.0,
+          "angle_degrees": 185.1393111078976,
+          "best_view": 176,
+          "r_at_best_view": 0.52898,
+          "r_at_same_view": 0.51572,
+          "top3": [
+            {
+              "view": 176,
+              "r": 0.52898
+            },
+            {
+              "view": 175,
+              "r": 0.52892
+            },
+            {
+              "view": 177,
+              "r": 0.52891
+            }
+          ]
+        },
+        "190": {
+          "nominal_angle_degrees": 190.0,
+          "angle_degrees": 190.0100949484264,
+          "best_view": 178,
+          "r_at_best_view": 0.50952,
+          "r_at_same_view": 0.49805,
+          "top3": [
+            {
+              "view": 178,
+              "r": 0.50952
+            },
+            {
+              "view": 179,
+              "r": 0.50941
+            },
+            {
+              "view": 177,
+              "r": 0.5094
+            }
+          ]
+        },
+        "195": {
+          "nominal_angle_degrees": 195.0,
+          "angle_degrees": 194.88220542227657,
+          "best_view": 302,
+          "r_at_best_view": 0.50202,
+          "r_at_same_view": 0.48161,
+          "top3": [
+            {
+              "view": 302,
+              "r": 0.50202
+            },
+            {
+              "view": 303,
+              "r": 0.50188
+            },
+            {
+              "view": 230,
+              "r": 0.50159
+            }
+          ]
+        },
+        "200": {
+          "nominal_angle_degrees": 200.0,
+          "angle_degrees": 199.75449123249268,
+          "best_view": 302,
+          "r_at_best_view": 0.50479,
+          "r_at_same_view": 0.47942,
+          "top3": [
+            {
+              "view": 302,
+              "r": 0.50479
+            },
+            {
+              "view": 231,
+              "r": 0.50457
+            },
+            {
+              "view": 230,
+              "r": 0.50453
+            }
+          ]
+        },
+        "205": {
+          "nominal_angle_degrees": 205.0,
+          "angle_degrees": 204.6025616521813,
+          "best_view": 231,
+          "r_at_best_view": 0.51586,
+          "r_at_same_view": 0.48502,
+          "top3": [
+            {
+              "view": 231,
+              "r": 0.51586
+            },
+            {
+              "view": 232,
+              "r": 0.51567
+            },
+            {
+              "view": 302,
+              "r": 0.51548
+            }
+          ]
+        },
+        "210": {
+          "nominal_angle_degrees": 210.0,
+          "angle_degrees": 210.2916129241168,
+          "best_view": 233,
+          "r_at_best_view": 0.53791,
+          "r_at_same_view": 0.50598,
+          "top3": [
+            {
+              "view": 233,
+              "r": 0.53791
+            },
+            {
+              "view": 232,
+              "r": 0.53787
+            },
+            {
+              "view": 231,
+              "r": 0.53776
+            }
+          ]
+        },
+        "215": {
+          "nominal_angle_degrees": 215.0,
+          "angle_degrees": 215.16392148206234,
+          "best_view": 233,
+          "r_at_best_view": 0.56331,
+          "r_at_same_view": 0.5288,
+          "top3": [
+            {
+              "view": 233,
+              "r": 0.56331
+            },
+            {
+              "view": 234,
+              "r": 0.5633
+            },
+            {
+              "view": 235,
+              "r": 0.56292
+            }
+          ]
+        },
+        "220": {
+          "nominal_angle_degrees": 220.0,
+          "angle_degrees": 220.0133133157191,
+          "best_view": 235,
+          "r_at_best_view": 0.59274,
+          "r_at_same_view": 0.56195,
+          "top3": [
+            {
+              "view": 235,
+              "r": 0.59274
+            },
+            {
+              "view": 234,
+              "r": 0.59265
+            },
+            {
+              "view": 236,
+              "r": 0.59243
+            }
+          ]
+        },
+        "225": {
+          "nominal_angle_degrees": 225.0,
+          "angle_degrees": 224.88598483204078,
+          "best_view": 243,
+          "r_at_best_view": 0.62708,
+          "r_at_same_view": 0.59945,
+          "top3": [
+            {
+              "view": 243,
+              "r": 0.62708
+            },
+            {
+              "view": 242,
+              "r": 0.62702
+            },
+            {
+              "view": 241,
+              "r": 0.62676
+            }
+          ]
+        },
+        "230": {
+          "nominal_angle_degrees": 230.0,
+          "angle_degrees": 229.7585979184931,
+          "best_view": 244,
+          "r_at_best_view": 0.66439,
+          "r_at_same_view": 0.63948,
+          "top3": [
+            {
+              "view": 244,
+              "r": 0.66439
+            },
+            {
+              "view": 243,
+              "r": 0.66426
+            },
+            {
+              "view": 245,
+              "r": 0.66399
+            }
+          ]
+        },
+        "235": {
+          "nominal_angle_degrees": 235.0,
+          "angle_degrees": 234.63107008825546,
+          "best_view": 245,
+          "r_at_best_view": 0.70175,
+          "r_at_same_view": 0.68162,
+          "top3": [
+            {
+              "view": 245,
+              "r": 0.70175
+            },
+            {
+              "view": 244,
+              "r": 0.70172
+            },
+            {
+              "view": 246,
+              "r": 0.70167
+            }
+          ]
+        },
+        "240": {
+          "nominal_angle_degrees": 240.0,
+          "angle_degrees": 240.29579558589714,
+          "best_view": 247,
+          "r_at_best_view": 0.7424,
+          "r_at_same_view": 0.72844,
+          "top3": [
+            {
+              "view": 247,
+              "r": 0.7424
+            },
+            {
+              "view": 248,
+              "r": 0.74232
+            },
+            {
+              "view": 246,
+              "r": 0.7423
+            }
+          ]
+        },
+        "245": {
+          "nominal_angle_degrees": 245.0,
+          "angle_degrees": 245.16848402858687,
+          "best_view": 250,
+          "r_at_best_view": 0.77365,
+          "r_at_same_view": 0.76694,
+          "top3": [
+            {
+              "view": 250,
+              "r": 0.77365
+            },
+            {
+              "view": 249,
+              "r": 0.77323
+            },
+            {
+              "view": 251,
+              "r": 0.77318
+            }
+          ]
+        },
+        "250": {
+          "nominal_angle_degrees": 250.0,
+          "angle_degrees": 250.04006851671812,
+          "best_view": 254,
+          "r_at_best_view": 0.79959,
+          "r_at_same_view": 0.79644,
+          "top3": [
+            {
+              "view": 254,
+              "r": 0.79959
+            },
+            {
+              "view": 253,
+              "r": 0.7993
+            },
+            {
+              "view": 252,
+              "r": 0.79893
+            }
+          ]
+        },
+        "255": {
+          "nominal_angle_degrees": 255.0,
+          "angle_degrees": 254.9138971747355,
+          "best_view": 257,
+          "r_at_best_view": 0.81932,
+          "r_at_same_view": 0.81805,
+          "top3": [
+            {
+              "view": 257,
+              "r": 0.81932
+            },
+            {
+              "view": 256,
+              "r": 0.81919
+            },
+            {
+              "view": 258,
+              "r": 0.81896
+            }
+          ]
+        },
+        "260": {
+          "nominal_angle_degrees": 260.0,
+          "angle_degrees": 259.76098641448164,
+          "best_view": 261,
+          "r_at_best_view": 0.83447,
+          "r_at_same_view": 0.83371,
+          "top3": [
+            {
+              "view": 261,
+              "r": 0.83447
+            },
+            {
+              "view": 262,
+              "r": 0.83425
+            },
+            {
+              "view": 263,
+              "r": 0.8341
+            }
+          ]
+        },
+        "265": {
+          "nominal_angle_degrees": 265.0,
+          "angle_degrees": 264.6342358762639,
+          "best_view": 266,
+          "r_at_best_view": 0.84554,
+          "r_at_same_view": 0.84485,
+          "top3": [
+            {
+              "view": 266,
+              "r": 0.84554
+            },
+            {
+              "view": 265,
+              "r": 0.84485
+            },
+            {
+              "view": 264,
+              "r": 0.84475
+            }
+          ]
+        },
+        "270": {
+          "nominal_angle_degrees": 270.0,
+          "angle_degrees": 270.3241812941133,
+          "best_view": 269,
+          "r_at_best_view": 0.84934,
+          "r_at_same_view": 0.84921,
+          "top3": [
+            {
+              "view": 269,
+              "r": 0.84934
+            },
+            {
+              "view": 270,
+              "r": 0.84921
+            },
+            {
+              "view": 268,
+              "r": 0.84876
+            }
+          ]
+        },
+        "275": {
+          "nominal_angle_degrees": 275.0,
+          "angle_degrees": 275.17298809848415,
+          "best_view": 277,
+          "r_at_best_view": 0.84461,
+          "r_at_same_view": 0.8439,
+          "top3": [
+            {
+              "view": 277,
+              "r": 0.84461
+            },
+            {
+              "view": 275,
+              "r": 0.8439
+            },
+            {
+              "view": 276,
+              "r": 0.84386
+            }
+          ]
+        },
+        "280": {
+          "nominal_angle_degrees": 280.0,
+          "angle_degrees": 280.0438771443394,
+          "best_view": 279,
+          "r_at_best_view": 0.84316,
+          "r_at_same_view": 0.84285,
+          "top3": [
+            {
+              "view": 279,
+              "r": 0.84316
+            },
+            {
+              "view": 280,
+              "r": 0.84285
+            },
+            {
+              "view": 281,
+              "r": 0.84134
+            }
+          ]
+        },
+        "285": {
+          "nominal_angle_degrees": 285.0,
+          "angle_degrees": 284.91656620072683,
+          "best_view": 264,
+          "r_at_best_view": 0.83477,
+          "r_at_same_view": 0.83154,
+          "top3": [
+            {
+              "view": 264,
+              "r": 0.83477
+            },
+            {
+              "view": 266,
+              "r": 0.83456
+            },
+            {
+              "view": 265,
+              "r": 0.83442
+            }
+          ]
+        },
+        "290": {
+          "nominal_angle_degrees": 290.0,
+          "angle_degrees": 289.7870520121002,
+          "best_view": 261,
+          "r_at_best_view": 0.82229,
+          "r_at_same_view": 0.81723,
+          "top3": [
+            {
+              "view": 261,
+              "r": 0.82229
+            },
+            {
+              "view": 262,
+              "r": 0.82198
+            },
+            {
+              "view": 260,
+              "r": 0.82162
+            }
+          ]
+        },
+        "295": {
+          "nominal_angle_degrees": 295.0,
+          "angle_degrees": 294.6329895691381,
+          "best_view": 290,
+          "r_at_best_view": 0.80411,
+          "r_at_same_view": 0.79785,
+          "top3": [
+            {
+              "view": 290,
+              "r": 0.80411
+            },
+            {
+              "view": 291,
+              "r": 0.80395
+            },
+            {
+              "view": 289,
+              "r": 0.80369
+            }
+          ]
+        },
+        "300": {
+          "nominal_angle_degrees": 300.0,
+          "angle_degrees": 300.3244074699596,
+          "best_view": 293,
+          "r_at_best_view": 0.77848,
+          "r_at_same_view": 0.76494,
+          "top3": [
+            {
+              "view": 293,
+              "r": 0.77848
+            },
+            {
+              "view": 294,
+              "r": 0.77825
+            },
+            {
+              "view": 292,
+              "r": 0.77807
+            }
+          ]
+        },
+        "305": {
+          "nominal_angle_degrees": 305.0,
+          "angle_degrees": 305.1966809536183,
+          "best_view": 296,
+          "r_at_best_view": 0.74909,
+          "r_at_same_view": 0.7279,
+          "top3": [
+            {
+              "view": 296,
+              "r": 0.74909
+            },
+            {
+              "view": 295,
+              "r": 0.74877
+            },
+            {
+              "view": 297,
+              "r": 0.74871
+            }
+          ]
+        },
+        "310": {
+          "nominal_angle_degrees": 310.0,
+          "angle_degrees": 310.0670031297959,
+          "best_view": 299,
+          "r_at_best_view": 0.71648,
+          "r_at_same_view": 0.68667,
+          "top3": [
+            {
+              "view": 299,
+              "r": 0.71648
+            },
+            {
+              "view": 300,
+              "r": 0.71648
+            },
+            {
+              "view": 301,
+              "r": 0.71589
+            }
+          ]
+        },
+        "315": {
+          "nominal_angle_degrees": 315.0,
+          "angle_degrees": 314.9145014604537,
+          "best_view": 302,
+          "r_at_best_view": 0.67956,
+          "r_at_same_view": 0.64271,
+          "top3": [
+            {
+              "view": 302,
+              "r": 0.67956
+            },
+            {
+              "view": 303,
+              "r": 0.67939
+            },
+            {
+              "view": 301,
+              "r": 0.67919
+            }
+          ]
+        },
+        "320": {
+          "nominal_angle_degrees": 320.0,
+          "angle_degrees": 319.7870385652814,
+          "best_view": 305,
+          "r_at_best_view": 0.6381,
+          "r_at_same_view": 0.59335,
+          "top3": [
+            {
+              "view": 305,
+              "r": 0.6381
+            },
+            {
+              "view": 304,
+              "r": 0.63797
+            },
+            {
+              "view": 306,
+              "r": 0.63777
+            }
+          ]
+        },
+        "325": {
+          "nominal_angle_degrees": 325.0,
+          "angle_degrees": 324.65839451237525,
+          "best_view": 308,
+          "r_at_best_view": 0.59402,
+          "r_at_same_view": 0.54282,
+          "top3": [
+            {
+              "view": 308,
+              "r": 0.59402
+            },
+            {
+              "view": 307,
+              "r": 0.59392
+            },
+            {
+              "view": 309,
+              "r": 0.59388
+            }
+          ]
+        },
+        "330": {
+          "nominal_angle_degrees": 330.0,
+          "angle_degrees": 330.316480735669,
+          "best_view": 311,
+          "r_at_best_view": 0.54118,
+          "r_at_same_view": 0.47857,
+          "top3": [
+            {
+              "view": 311,
+              "r": 0.54118
+            },
+            {
+              "view": 310,
+              "r": 0.54106
+            },
+            {
+              "view": 309,
+              "r": 0.54099
+            }
+          ]
+        },
+        "335": {
+          "nominal_angle_degrees": 335.0,
+          "angle_degrees": 335.169583342363,
+          "best_view": 311,
+          "r_at_best_view": 0.49315,
+          "r_at_same_view": 0.42379,
+          "top3": [
+            {
+              "view": 311,
+              "r": 0.49315
+            },
+            {
+              "view": 312,
+              "r": 0.49309
+            },
+            {
+              "view": 313,
+              "r": 0.49293
+            }
+          ]
+        },
+        "340": {
+          "nominal_angle_degrees": 340.0,
+          "angle_degrees": 340.0402911720435,
+          "best_view": 311,
+          "r_at_best_view": 0.44438,
+          "r_at_same_view": 0.37661,
+          "top3": [
+            {
+              "view": 311,
+              "r": 0.44438
+            },
+            {
+              "view": 312,
+              "r": 0.44423
+            },
+            {
+              "view": 310,
+              "r": 0.4442
+            }
+          ]
+        },
+        "345": {
+          "nominal_angle_degrees": 345.0,
+          "angle_degrees": 344.90764451235725,
+          "best_view": 257,
+          "r_at_best_view": 0.40365,
+          "r_at_same_view": 0.33355,
+          "top3": [
+            {
+              "view": 257,
+              "r": 0.40365
+            },
+            {
+              "view": 256,
+              "r": 0.4033
+            },
+            {
+              "view": 258,
+              "r": 0.40322
+            }
+          ]
+        },
+        "350": {
+          "nominal_angle_degrees": 350.0,
+          "angle_degrees": 349.77890662214475,
+          "best_view": 257,
+          "r_at_best_view": 0.37026,
+          "r_at_same_view": 0.29404,
+          "top3": [
+            {
+              "view": 257,
+              "r": 0.37026
+            },
+            {
+              "view": 258,
+              "r": 0.3701
+            },
+            {
+              "view": 259,
+              "r": 0.37004
+            }
+          ]
+        },
+        "355": {
+          "nominal_angle_degrees": 355.0,
+          "angle_degrees": 354.62979492558804,
+          "best_view": 259,
+          "r_at_best_view": 0.3408,
+          "r_at_same_view": 0.26158,
+          "top3": [
+            {
+              "view": 259,
+              "r": 0.3408
+            },
+            {
+              "view": 258,
+              "r": 0.34068
+            },
+            {
+              "view": 257,
+              "r": 0.34065
+            }
+          ]
+        }
+      }
+    }
+  }
+}

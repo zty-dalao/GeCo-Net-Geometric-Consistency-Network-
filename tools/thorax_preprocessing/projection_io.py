@@ -158,13 +158,48 @@ def frame_angle(properties: dict[str, object]) -> float | None:
     return None
 
 
+# Gantry-angle conventions.
+#
+# ``simulation`` 是 models/render.angle2vec 的历史约定：
+#     source = sad * (cos a, sin a, 0)，即角度在 XY 平面逆时针增加。
+# dental/spine 的投影就是用它仿真出来的，所以那边必须保持不变。
+#
+# ``varian`` 是真实扫描的约定，实测（见 verify_projection_alignment.py）：
+#     angle_eff = 90 - angle  ->  source = sad * (sin a, cos a, 0)
+# 即 gantry 0 度时源位于 +y，角度顺时针增加。
+ANGLE_CONVENTIONS = ("simulation", "varian")
+
+
+def convention_angle(angle_degrees: float, angle_convention: str = "simulation") -> float:
+    """方案 A：把存储的 gantry 角映射成 ``angle_to_vec`` 期望的角度。
+
+    这是「调用点变换」路径——不修改 ``angle_to_vec`` 本身。
+    """
+    if angle_convention == "simulation":
+        return float(angle_degrees)
+    if angle_convention == "varian":
+        return 90.0 - float(angle_degrees)
+    raise ValueError(f"Unknown angle convention: {angle_convention}")
+
+
 def angle_to_vec(
     angle_degrees: float,
     geometry: ScanGeometry,
     spacing: tuple[float, float],
     detector_offset_u: float,
     detector_offset_v: float,
+    angle_convention: str = "simulation",
 ) -> np.ndarray:
+    """方案 B：把约定变换放在函数内部（默认保持历史行为）。
+
+    ``convention_angle()`` 是方案 A，本参数是方案 B。两者必须给出完全相同的
+    ``vec``；``verify_projection_alignment.py --mode convention-equivalence`` 会
+    在真实数据上逐帧校验这一点。
+    """
+    if angle_convention == "varian":
+        angle_degrees = 90.0 - float(angle_degrees)
+    elif angle_convention != "simulation":
+        raise ValueError(f"Unknown angle convention: {angle_convention}")
     angle = np.deg2rad(angle_degrees)
     source = np.array([geometry.sad * np.cos(angle), geometry.sad * np.sin(angle), 0.0])
     detector = np.array(
@@ -188,7 +223,13 @@ def convert_projections(
     detector_offset_v: float | None = None,
     output_views: int = 360,
     output_resolution: tuple[int, int] | None = (256, 256),
+    angle_convention: str = "varian",
+    convention_path: str = "call-site",
 ) -> tuple[np.ndarray, list[dict[str, object]], tuple[float, float]]:
+    if angle_convention not in ANGLE_CONVENTIONS:
+        raise ValueError(f"Unknown angle convention: {angle_convention}")
+    if convention_path not in ("call-site", "in-function"):
+        raise ValueError(f"Unknown convention path: {convention_path}")
     acquisition = find_acquisition(case_root)
     all_paths = sorted(acquisition.glob("Proj_*.xim"))
     if not all_paths:
@@ -269,13 +310,26 @@ def convert_projections(
             per_frame_u = offset_u
         if per_frame_v is None:
             per_frame_v = offset_v
+        if convention_path == "call-site":
+            # 方案 A：在调用点把角度转成 angle_to_vec 期望的取值
+            frame_vec = angle_to_vec(
+                convention_angle(angle, angle_convention), geometry, spacing,
+                per_frame_u, per_frame_v,
+            )
+        else:
+            # 方案 B：约定由 angle_to_vec 内部处理
+            frame_vec = angle_to_vec(
+                angle, geometry, spacing, per_frame_u, per_frame_v,
+                angle_convention=angle_convention,
+            )
         frames.append(
             {
                 "file": f"{index:04d}",
                 "source_file": path.name,
                 "nominal_angle_degrees": target,
                 "angle_degrees": angle,
-                "vec": angle_to_vec(angle, geometry, spacing, per_frame_u, per_frame_v).tolist(),
+                "angle_convention": angle_convention,
+                "vec": frame_vec.tolist(),
             }
         )
 

@@ -72,6 +72,27 @@ class CBCTDataset(torch.utils.data.Dataset):
             # we only recommend random sampling during evaluation because X-ray simulation is really slow, 
             # only for dental/spine dataset
             # basic information
+            # ---- half-fan / 角度约定安全门 ----
+            # 本分支用 models/render.angle2vec 在线合成 DRR。该函数有两条与真实扫描数据
+            # 不兼容的地方，且都会“静默跑通不报错”：
+            #   1) 它的探测器中心写死为 -(sid-sad)*(cos a, sin a, 0)，无法表达 half-fan
+            #      的横向偏移（thorax 实测 ImagerLat = -175.5 mm ≈ 104 像素，占图幅 41%）；
+            #   2) 它用的是“数学逆时针”角度约定，而真实 Varian 数据实测是
+            #      angle -> 90 - angle（见 transforms.json 的 angle_convention 字段）。
+            # 因此对本类数据必须走 uniform 分支（它直接读取 frames[].vec）。
+            detector_offset = paras.get("detector_offset_mm") or [0.0, 0.0]
+            recorded_convention = paras.get("angle_convention", "simulation")
+            offset_magnitude = max(abs(float(v)) for v in detector_offset)
+            if offset_magnitude > 1.0 or recorded_convention != "simulation":
+                raise ValueError(
+                    f"--angle_sampling random 无法用于 {self.dataset_split[index]}："
+                    f"该病例的 detector_offset_mm={list(detector_offset)}"
+                    f"（half-fan 偏移），angle_convention={recorded_convention!r}。"
+                    "models/render.angle2vec 既不能表达探测器偏移，也用的是与真实扫描"
+                    "不同的角度约定，在线合成 DRR 会与实测投影整体错位（实测约 104 像素 "
+                    "= 图幅 41%）。请改用 --angle_sampling uniform：它直接读取 "
+                    "transforms.json 的 frames[].vec，几何与实测一致。"
+                )
             isocenter = [0, 0, 0]
             sad = paras['sad']
             sid = paras['sid']

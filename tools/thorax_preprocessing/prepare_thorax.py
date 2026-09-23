@@ -296,6 +296,8 @@ def convert_case(
             output_resolution=(args.projection_resolution, args.projection_resolution)
             if args.projection_resolution > 0
             else None,
+            angle_convention=args.angle_convention,
+            convention_path=args.angle_convention_path,
         )
         params: dict[str, object] = {
             "obj_index": name,
@@ -320,6 +322,8 @@ def convert_case(
                 else args.detector_offset_v_mm,
             ],
             "gt_source": args.gt_source,
+            "angle_convention": args.angle_convention,
+            "angle_convention_path": args.angle_convention_path,
             "ct_slice_range": [
                 ct_series.paths.index(ct_paths[0]),
                 ct_series.paths.index(ct_paths[-1]) + 1,
@@ -405,6 +409,26 @@ def main() -> None:
         help="Square detector resolution after physical-space interpolation; 0 keeps binned shape",
     )
     parser.add_argument("--projection-mode", choices=("log", "raw"), default="log")
+    parser.add_argument(
+        "--angle-convention",
+        choices=("varian", "simulation"),
+        default="varian",
+        help=(
+            "Gantry-angle convention for frames[].vec. 'varian' (default, verified "
+            "against real projections) maps angle -> 90 - angle, i.e. "
+            "source = sad*(sin a, cos a, 0). 'simulation' reproduces the historical "
+            "math-CCW convention used by models/render.angle2vec."
+        ),
+    )
+    parser.add_argument(
+        "--angle-convention-path",
+        choices=("call-site", "in-function"),
+        default="call-site",
+        help=(
+            "Which implementation of the convention to use. Both must produce "
+            "identical vec; kept switchable so the equivalence can be re-verified."
+        ),
+    )
     parser.add_argument("--output-views", type=int, default=360)
     parser.add_argument("--max-line-integral", type=float, default=20.0)
     parser.add_argument("--detector-offset-u-mm", type=float, default=None)

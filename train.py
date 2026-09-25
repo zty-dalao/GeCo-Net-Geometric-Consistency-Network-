@@ -60,6 +60,14 @@ if __name__ == '__main__':
         completion_geometry_channels=args.completion_geometry_channels,
         completion_residual_scale=args.completion_residual_scale,
         completion_use_checkpoint=not args.disable_completion_checkpoint,
+        multiscale_decoder=args.multiscale_decoder,
+        multiscale_fusion=args.multiscale_fusion,
+        multiscale_shallow=args.multiscale_shallow,
+        multiscale_shallow_channels=args.multiscale_shallow_channels,
+        multiscale_highres_fusion=args.multiscale_highres_fusion,
+        use_multiscale_supervision=args.use_multiscale_supervision,
+        use_hierarchical_view_weights=args.use_hierarchical_view_weights,
+        use_uncertainty_gate=args.use_uncertainty_gate,
     )
     if args.pretrained_backbone is not None and not args.resume:
         backbone_checkpoint = torch.load(args.pretrained_backbone, map_location="cpu")

@@ -58,6 +58,20 @@ def parse_args():
     parser.add_argument("--completion_geometry_hidden_channels", type=int, default=32)
     parser.add_argument("--completion_geometry_channels", type=int, default=64)
     parser.add_argument("--completion_residual_scale", type=float, default=1.0)
+    parser.add_argument(
+        "--multiscale_decoder", action="store_true",
+        help="Build the experimental E2/E3/E4 geometry-aware multiscale decoder",
+    )
+    parser.add_argument("--multiscale_fusion", choices=("concat", "gated_add"), default="concat")
+    parser.add_argument("--multiscale_shallow", choices=("none", "2d_fuse"), default="none")
+    parser.add_argument("--multiscale_shallow_channels", type=int, default=16)
+    parser.add_argument("--multiscale_highres_fusion", choices=("concat", "gated_add"), default="gated_add")
+    parser.add_argument("--use_multiscale_supervision", action="store_true")
+    parser.add_argument("--multiscale_aux_weights", type=str, default="0.2,0.1,0.05")
+    parser.add_argument("--cross_scale_lambda", type=float, default=0.0)
+    parser.add_argument("--use_hierarchical_view_weights", action="store_true")
+    parser.add_argument("--view_weight_delta_lambda", type=float, default=0.0)
+    parser.add_argument("--use_uncertainty_gate", action="store_true")
     parser.add_argument("--dataname", type=str, default='test', help="evaluate dataname") 
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | thorax | Walnuts")
     parser.add_argument(
@@ -98,6 +112,16 @@ def parse_args():
 
     args = parser.parse_args()
 
+    if args.multiscale_decoder and (args.use_adapter or args.use_prior_completion):
+        parser.error(
+            "--multiscale_decoder 当前不与 --use_adapter 或 --use_prior_completion 同时使用"
+        )
+    if not args.multiscale_decoder and (
+        args.use_multiscale_supervision
+        or args.use_hierarchical_view_weights
+        or args.use_uncertainty_gate
+    ):
+        parser.error("E3-E6开关必须与 --multiscale_decoder 一起使用")
     if min(args.bone_lambda, args.soft_mask_lambda, args.ssim_lambda) < 0:
         parser.error("bone_lambda, soft_mask_lambda, and ssim_lambda must be non-negative")
     if args.soft_window_high <= args.soft_window_low:

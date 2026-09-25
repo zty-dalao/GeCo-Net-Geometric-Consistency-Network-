@@ -77,6 +77,25 @@ class trainer():
             self.phase_c_hold_epochs,
         ))
         self.transfer_schedule = args.transfer_schedule
+        self.multiscale_decoder = bool(getattr(args, "multiscale_decoder", False))
+        self.use_multiscale_supervision = bool(
+            getattr(args, "use_multiscale_supervision", False)
+        )
+        try:
+            self.multiscale_aux_weights = tuple(
+                float(value.strip())
+                for value in getattr(
+                    args, "multiscale_aux_weights", "0.2,0.1,0.05"
+                ).split(",")
+            )
+        except ValueError as exc:
+            raise ValueError("--multiscale_aux_weights must be comma-separated numbers") from exc
+        if len(self.multiscale_aux_weights) != 3:
+            raise ValueError("--multiscale_aux_weights requires three values")
+        self.cross_scale_lambda = float(getattr(args, "cross_scale_lambda", 0.0))
+        self.view_weight_delta_lambda = float(
+            getattr(args, "view_weight_delta_lambda", 0.0)
+        )
         self.legacy_stage1_epochs = args.legacy_stage1_epochs
         self.legacy_stage2_epochs = args.legacy_stage2_epochs
         self.legacy_stage3_backbone_lr_factor = (
@@ -119,6 +138,8 @@ class trainer():
             self.phase_d_backbone_lr_factor, self.phase_d_aggregator_lr_factor,
             self.decoder_core_lr_factor, self.prior_anchor_lambda,
             self.phase_d_anchor_factor,
+            self.cross_scale_lambda,
+            self.view_weight_delta_lambda,
         )
         if any(value < 0 for value in nonnegative):
             raise ValueError("Loss weights, LR factors, and anchor factors must be non-negative")
@@ -322,17 +343,24 @@ class trainer():
             destination.append(parameter)
         aggregator = getattr(self.G_render, "aggregator", None)
         aggregator_parameters = [] if aggregator is None else list(aggregator.parameters())
-        decoder_core_parameters = list(itertools.chain(
-            self.G_render.decoder.in_blk.parameters(),
-            self.G_render.decoder.res_blk_list.parameters(),
-            self.G_render.decoder.res_blk_last.parameters(),
-        ))
-        decoder_up_low_parameters = list(itertools.chain.from_iterable(
-            block.parameters() for block in self.G_render.decoder.up_blk_list[:-1]
-        ))
-        decoder_up_high_parameters = list(self.G_render.decoder.up_blk_list[-1].parameters())
-        decoder_out_parameters = list(self.G_render.decoder.out_blk.parameters())
-        optimizer_groups = [
+        if self.multiscale_decoder:
+            optimizer_groups = [
+                {"params": encoder_early_parameters, "lr": init_lr, "name": "encoder_early"},
+                {"params": encoder_late_parameters, "lr": init_lr, "name": "encoder_late"},
+                {"params": list(self.G_render.decoder.parameters()), "lr": init_lr, "name": "decoder_multiscale"},
+            ]
+        else:
+            decoder_core_parameters = list(itertools.chain(
+                self.G_render.decoder.in_blk.parameters(),
+                self.G_render.decoder.res_blk_list.parameters(),
+                self.G_render.decoder.res_blk_last.parameters(),
+            ))
+            decoder_up_low_parameters = list(itertools.chain.from_iterable(
+                block.parameters() for block in self.G_render.decoder.up_blk_list[:-1]
+            ))
+            decoder_up_high_parameters = list(self.G_render.decoder.up_blk_list[-1].parameters())
+            decoder_out_parameters = list(self.G_render.decoder.out_blk.parameters())
+            optimizer_groups = [
             {"params": encoder_early_parameters, "lr": init_lr, "name": "encoder_early"},
             {"params": encoder_late_parameters, "lr": init_lr, "name": "encoder_late"},
             {"params": aggregator_parameters, "lr": init_lr, "name": "aggregator"},
@@ -346,7 +374,7 @@ class trainer():
             {"params": decoder_up_low_parameters, "lr": init_lr, "name": "decoder_up_low"},
             {"params": decoder_up_high_parameters, "lr": init_lr, "name": "decoder_up_high"},
             {"params": decoder_out_parameters, "lr": init_lr, "name": "decoder_out"},
-        ]
+            ]
         lr_lambdas = [
             (lambda epoch, name=group["name"]: self._lr_multiplier(epoch, name))
             for group in optimizer_groups
@@ -468,6 +496,7 @@ class trainer():
                 "decoder_up_low": self.stage0_decoder_lr_factor,
                 "decoder_up_high": self.stage0_decoder_lr_factor,
                 "decoder_out": self.stage0_decoder_lr_factor,
+                "decoder_multiscale": self.stage0_decoder_lr_factor,
             }
             return decay * factors.get(group_name, 1.0)
         if stage == 1:
@@ -918,6 +947,84 @@ class trainer():
                 )
         return F.l1_loss(current, reference)
 
+    def _multiscale_auxiliary_loss(self, volume_predict, volume_gt):
+        """E5 prediction-space supervision and E6 view-logit regularization."""
+        zero = volume_predict.new_zeros(())
+        if not self.multiscale_decoder:
+            return zero, {}
+        aux = getattr(self.G_render, "last_multiscale_aux", None) or {}
+        values = {}
+        total = zero
+
+        # The decoder stores predictions as [1, 1, X, Y, Z], whereas the
+        # project-level volume tensors use the display orientation [Z, Y, X].
+        predictions = {}
+        for name in ("pred_e2", "pred_e3", "pred_e4"):
+            prediction = aux.get(name)
+            if prediction is not None:
+                predictions[name] = prediction[0, 0].transpose(0, 2)
+
+        if self.use_multiscale_supervision:
+            for name, weight in zip(
+                ("pred_e2", "pred_e3", "pred_e4"), self.multiscale_aux_weights
+            ):
+                prediction = predictions.get(name)
+                if prediction is None or weight <= 0:
+                    continue
+                target = F.adaptive_avg_pool3d(
+                    volume_gt[None, None], prediction.shape,
+                )[0, 0]
+                term = self.mse_loss(prediction, target) * weight
+                total = total + term
+                values[f"multiscale_{name}_loss"] = term
+
+            # Enforce consistency in physical prediction space, not equality
+            # of latent features.  The full-resolution output is the anchor.
+            if self.cross_scale_lambda > 0 and "pred_e2" in predictions:
+                pred2 = predictions["pred_e2"]
+                consistency = self.mse_loss(
+                    F.adaptive_avg_pool3d(
+                        volume_predict[None, None], pred2.shape,
+                    )[0, 0],
+                    pred2,
+                )
+                if "pred_e3" in predictions:
+                    pred3 = predictions["pred_e3"]
+                    consistency = consistency + self.mse_loss(
+                        F.adaptive_avg_pool3d(
+                            pred2[None, None], pred3.shape,
+                        )[0, 0],
+                        pred3,
+                    )
+                if "pred_e4" in predictions:
+                    pred4 = predictions["pred_e4"]
+                    source = predictions.get("pred_e3", pred2)
+                    consistency = consistency + self.mse_loss(
+                        F.adaptive_avg_pool3d(
+                            source[None, None], pred4.shape,
+                        )[0, 0],
+                        pred4,
+                    )
+                consistency = consistency * self.cross_scale_lambda
+                total = total + consistency
+                values["cross_scale_loss"] = consistency
+
+        if self.view_weight_delta_lambda > 0:
+            delta = aux.get("view_delta_l1")
+            if delta is not None:
+                delta_term = delta * self.view_weight_delta_lambda
+                total = total + delta_term
+                values["view_weight_delta_loss"] = delta_term
+
+        for key in (
+            "uncertainty_e2_mean", "uncertainty_e3_mean",
+            "uncertainty_e4_mean", "uncertainty_e01_mean",
+        ):
+            if key in aux:
+                values[key] = aux[key]
+        values["multiscale_aux_loss"] = total
+        return total, values
+
     @staticmethod
     def _mu_to_hu(volume):
         return (volume / 0.022 - 1.0) * 1000.0
@@ -1232,6 +1339,13 @@ class trainer():
         loss_dict['mse_loss_3d'] = round(mse_loss_3d.item(), 8)
         G_loss = mse_loss_3d
 
+        multiscale_aux, multiscale_aux_values = self._multiscale_auxiliary_loss(
+            volume_predict, volume_gt,
+        )
+        G_loss += multiscale_aux
+        for key, value in multiscale_aux_values.items():
+            loss_dict[key] = round(value.item(), 8)
+
         # gd loss，梯度损失
         if self.gd1_lambda > 0:
             gd1_loss = gradient1_loss(volume_gt=volume_gt, volume_predict=volume_predict, loss_func=self.mse_loss) * self.gd1_lambda
@@ -1303,6 +1417,17 @@ class trainer():
             'soft_mask_raw', 'soft_mask_loss', 'ssim_loss_raw', 'ssim_loss',
         ):
             self.writer.add_scalar(f"step/train_{key}", loss_dict[key], self.global_step)
+        for key in (
+            'multiscale_aux_loss', 'multiscale_pred_e2_loss',
+            'multiscale_pred_e3_loss', 'multiscale_pred_e4_loss',
+            'cross_scale_loss', 'view_weight_delta_loss',
+            'uncertainty_e2_mean', 'uncertainty_e3_mean',
+            'uncertainty_e4_mean', 'uncertainty_e01_mean',
+        ):
+            if key in loss_dict:
+                self.writer.add_scalar(
+                    f"step/train_{key}", loss_dict[key], self.global_step,
+                )
         self.writer.add_scalar("step/latent_weight", latent_weight, self.global_step)
         self.writer.add_scalar("step/prior_anchor_weight", anchor_weight, self.global_step)
         self.writer.add_scalar(
@@ -1385,6 +1510,13 @@ class trainer():
         loss_3d = self.mse_loss(volume_predict, volume_gt) * self.mse_lambda_3d
         loss_dict['mse_loss_3d'] = round(loss_3d.item(), 8)
         total_loss = loss_3d
+
+        multiscale_aux, multiscale_aux_values = self._multiscale_auxiliary_loss(
+            volume_predict, volume_gt,
+        )
+        total_loss += multiscale_aux
+        for key, value in multiscale_aux_values.items():
+            loss_dict[key] = round(value.item(), 8)
 
         if self.gd1_lambda > 0:
             gd1_loss = gradient1_loss(

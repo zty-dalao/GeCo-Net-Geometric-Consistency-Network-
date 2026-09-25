@@ -7,6 +7,7 @@ from models.aggregator import adafusor, localfusor, meanfusor, varfusor
 from submodel.adapter import LatentAdapter
 from submodel.adapter_with_transformer import TransformerLatentAdapter
 from submodel.continuous_prior_completion import ContinuousPriorCompletion
+from submodel.multiscale_lift import MultiScaleLiftDecoder
 
 # Main Model
 class model(nn.Module):
@@ -31,6 +32,14 @@ class model(nn.Module):
         completion_geometry_channels=64,
         completion_residual_scale=1.0,
         completion_use_checkpoint=True,
+        multiscale_decoder=False,
+        multiscale_fusion="concat",
+        multiscale_shallow="none",
+        multiscale_shallow_channels=16,
+        multiscale_highres_fusion="gated_add",
+        use_multiscale_supervision=False,
+        use_hierarchical_view_weights=False,
+        use_uncertainty_gate=False,
     ):
         super(model, self).__init__()
         self.device = device
@@ -43,7 +52,27 @@ class model(nn.Module):
         self.last_layer = model_conf['last_layer']
         self.fusion = model_conf['fusion']
         self.encoder = ResEncoder(self.encoder_conf).to(device)
-        self.decoder = generator(self.decoder_conf).to(device)
+        self.use_multiscale_decoder = bool(multiscale_decoder)
+        if self.use_multiscale_decoder:
+            if use_adapter or use_prior_completion:
+                raise ValueError(
+                    "multiscale_decoder currently uses its own E2/E3/E4 latent path; "
+                    "disable --use_adapter and --use_prior_completion for this ablation."
+                )
+            self.decoder = MultiScaleLiftDecoder(
+                decoder_scale=int(self.decoder_conf.scale),
+                fusion=str(multiscale_fusion),
+                use_shallow_2d_fusion=(str(multiscale_shallow) == "2d_fuse"),
+                shallow_channels=int(multiscale_shallow_channels),
+                highres_fusion=str(multiscale_highres_fusion),
+                use_multiscale_supervision=bool(use_multiscale_supervision),
+                use_hierarchical_view_weights=bool(use_hierarchical_view_weights),
+                use_uncertainty_gate=bool(use_uncertainty_gate),
+                use_query_checkpoint=bool(use_query_checkpoint),
+                query_chunk_size=int(query_chunk_size),
+            ).to(device)
+        else:
+            self.decoder = generator(self.decoder_conf).to(device)
         self.use_adapter = bool(use_adapter)
         self.adapter_type = str(adapter_type).lower()
         if self.use_adapter:
@@ -89,6 +118,7 @@ class model(nn.Module):
             self.prior_completion = nn.Identity()
         self.last_aligned_latent = None
         self.last_completion_residual = None
+        self.last_multiscale_aux = None
 
         self.aggregator_conf = model_conf['aggregator']
         if self.fusion == 'local':
@@ -134,7 +164,25 @@ class model(nn.Module):
         h = torch.cat(h,dim=1)
         return h.reshape(1,-1,x,y,z)                                # ③ 低分辨率特征体积 [1, C, X/4, Y/4, Z/4]
 
-    def forward(self, xyz_world, return_latent=False):
+    def forward(self, xyz_world, return_latent=False, xyz_full_world=None):
+        if self.use_multiscale_decoder:
+            outputs, aux = self.decoder(
+                self.encoder.latent_list,
+                self.encoder.poses,
+                self.encoder.image_shape,
+                xyz_full=xyz_full_world,
+                return_aux=True,
+            )
+            # The E2-resolution representation is the observation latent used
+            # for optional diagnostics. It is not a pCT teacher target in this
+            # standalone multiscale ablation.
+            self.last_aligned_latent = aux["e2"]
+            self.last_multiscale_aux = aux
+            outputs = outputs[0, 0, :, :, :].transpose(0, 2)
+            outputs = self.last_layer_act(outputs)
+            if return_latent:
+                return outputs, self.last_aligned_latent
+            return outputs
         latent = self.query_volume_latent(xyz_world)
         latent = self.adapter(latent)
         self.last_aligned_latent = latent

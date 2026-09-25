@@ -180,6 +180,67 @@ def parse_args():
         action="store_true",
         help="Enable geometry-conditioned continuous latent residual completion",
     )
+    parser.add_argument(
+        "--multiscale_decoder",
+        action="store_true",
+        help=(
+            "Use the experimental geometry-aware E2/E3/E4 multiscale lift decoder. "
+            "This standalone ablation currently disables Adapter and prior completion."
+        ),
+    )
+    parser.add_argument(
+        "--multiscale_fusion",
+        choices=("concat", "gated_add"),
+        default="concat",
+        help="Fusion used after each 3D upsampling step in the multiscale decoder.",
+    )
+    parser.add_argument(
+        "--multiscale_shallow",
+        choices=("none", "2d_fuse"),
+        default="none",
+        help="Optional F0/F1 branch; 2d_fuse is reserved for the full-grid implementation.",
+    )
+    parser.add_argument(
+        "--multiscale_shallow_channels",
+        type=int,
+        default=16,
+        help="Channels in the optional F0/F1 2D fusion stem.",
+    )
+    parser.add_argument(
+        "--multiscale_highres_fusion",
+        choices=("concat", "gated_add"),
+        default="gated_add",
+        help="E2 high-resolution F0/F1 fusion; gated_add uses zero-init alpha.",
+    )
+    parser.add_argument(
+        "--use_multiscale_supervision",
+        action="store_true",
+        help="Enable E5 intermediate prediction heads and multiscale losses.",
+    )
+    parser.add_argument(
+        "--multiscale_aux_weights",
+        type=str,
+        default="0.2,0.1,0.05",
+        help="E5 auxiliary weights in E2,E3,E4 order.",
+    )
+    parser.add_argument(
+        "--cross_scale_lambda", type=float, default=0.0,
+        help="E5 cross-scale prediction consistency weight.",
+    )
+    parser.add_argument(
+        "--use_hierarchical_view_weights",
+        action="store_true",
+        help="Enable E6 coarse-to-fine view logits for E4→E3→E2.",
+    )
+    parser.add_argument(
+        "--view_weight_delta_lambda", type=float, default=0.0,
+        help="E6 L1 penalty on per-scale view-logit corrections.",
+    )
+    parser.add_argument(
+        "--use_uncertainty_gate",
+        action="store_true",
+        help="Use view entropy/variance maps in E4 and E2 gates.",
+    )
     parser.add_argument("--completion_hidden_channels", type=int, default=16)
     parser.add_argument("--completion_geometry_hidden_channels", type=int, default=32)
     parser.add_argument("--completion_geometry_channels", type=int, default=64)
@@ -335,6 +396,31 @@ def parse_args():
 
     args = parser.parse_args()
 
+    if args.multiscale_decoder and (args.use_adapter or args.use_prior_completion):
+        parser.error(
+            "--multiscale_decoder 当前实验实现不与 --use_adapter 或 "
+            "--use_prior_completion 同时使用；请先完成E2/E3/E4基础消融。"
+        )
+    if args.multiscale_decoder and args.pretrained_decoder:
+        parser.error(
+            "--multiscale_decoder 使用独立Decoder结构，不能加载原SRGAN的 "
+            "--pretrained_decoder；如需初始化，请只使用 --pretrained_backbone。"
+        )
+    if args.multiscale_decoder:
+        try:
+            aux_weights = [float(v.strip()) for v in args.multiscale_aux_weights.split(",")]
+        except ValueError:
+            parser.error("--multiscale_aux_weights must be comma-separated numbers")
+        if len(aux_weights) != 3 or any(v < 0 for v in aux_weights):
+            parser.error("--multiscale_aux_weights requires three non-negative values")
+        if args.cross_scale_lambda < 0 or args.view_weight_delta_lambda < 0:
+            parser.error("--cross_scale_lambda and --view_weight_delta_lambda must be non-negative")
+    elif (
+        args.use_multiscale_supervision
+        or args.use_hierarchical_view_weights
+        or args.use_uncertainty_gate
+    ):
+        parser.error("E3-E6开关必须与 --multiscale_decoder 一起使用")
     if args.use_prior_completion and not args.pretrained_decoder:
         parser.error(
             "--use_prior_completion requires --pretrained_decoder to construct "

@@ -183,6 +183,12 @@ if __name__ == '__main__':
         clamp_min = conf.get_float('data.spine.clamp_min')
         clamp_max = conf.get_float('data.spine.clamp_max')
         divide = 10
+    if args.datatype == 'thorax':
+        # Keep evaluation preprocessing identical to trainer.py: thorax
+        # projections are converted with exp(-projection / 10).
+        clamp_min = conf.get_float('data.thorax.clamp_min')
+        clamp_max = conf.get_float('data.thorax.clamp_max')
+        divide = 10
     if args.datatype == 'Walnuts':
         clamp_min = conf.get_float('data.Walnuts.clamp_min')
         clamp_max = conf.get_float('data.Walnuts.clamp_max')

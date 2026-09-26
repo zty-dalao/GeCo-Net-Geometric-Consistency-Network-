@@ -271,6 +271,84 @@ python train.py \
 
 这不会加载旧SRGAN Decoder，因为新Decoder结构不兼容。
 
+如果你的 thorax 数据根目录实际为：
+
+```text
+./dataset/thorax/syn_data_cbct_gt_v2/
+├── <样本1>/gt_volume.nii.gz
+├── <样本1>/proj.nii.gz
+├── <样本1>/transforms.json
+└── ...
+```
+
+则 E1 命令应写成：
+
+```bash
+python train.py \
+  --name thorax_multiscale_e1_e234_concat_cbct_gt_v2 \
+  --datadir ./dataset/thorax/syn_data_cbct_gt_v2 \
+  --datatype thorax \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 \
+  --end 360 \
+  --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 200 \
+  --multiscale_decoder \
+  --multiscale_fusion concat \
+  --multiscale_shallow none \
+  --query_chunk_size 2000 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 \
+  --soft_window_high 240 \
+  --ssim_lambda 0.01 \
+  --device cuda:0
+```
+
+这里的`gt_volume.nii.gz`会被当前`CBCTDataset`自动读取为监督标签，不需要额外添加GT参数。`--datadir`不能写到某一个样本目录，必须写到`<样本>`的父目录。
+
+开始完整训练前，建议先确认所有`thorax_split.json`中的样本都存在以下三个文件：
+
+```text
+<datadir>/<样本>/gt_volume.nii.gz
+<datadir>/<样本>/proj.nii.gz
+<datadir>/<样本>/transforms.json
+```
+
+Thorax应继续使用`--angle_sampling uniform`，这样会直接读取`transforms.json`中的`frames[].vec`，保留真实投影的半扇几何和角度约定。
+
+对应评估命令（假设使用第199轮）：
+
+```bash
+python evaluate.py \
+  --name thorax_multiscale_e1_e234_concat_cbct_gt_v2 \
+  --datadir ./dataset/thorax/syn_data_cbct_gt_v2 \
+  --datatype thorax \
+  --train_scale 4 \
+  --eval_scale 4 \
+  --fusion ada \
+  --start 0 \
+  --end 360 \
+  --nviews 20 \
+  --angle_sampling uniform \
+  --multiscale_decoder \
+  --multiscale_fusion concat \
+  --multiscale_shallow none \
+  --resume_name 199 \
+  --query_chunk_size 2000 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 \
+  --soft_window_high 240 \
+  --ssim_lambda 0.01 \
+  --device cuda:0
+```
+
 ## 6. E2：加入F0/F1二维融合
 
 E1验证成功后，可以使用：

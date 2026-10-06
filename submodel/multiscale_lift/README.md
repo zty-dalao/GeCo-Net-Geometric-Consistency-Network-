@@ -454,6 +454,71 @@ E4-B是推荐的显存/表达能力折中：低分辨率保留concat信息，高
 --multiscale_highres_fusion concat
 ```
 
+最后总和测试下来，发现concate+concate的实验结果最好，于是打算在双concate上继续实验，实验分为f01进行融合到8，32，不融合。（E4的双拼接是用的默认融合到16），下面是实验命令。
+
+f0、f1融合到8
+```bash
+python train.py \
+  --name thorax_multiscale_e4a_f01_c8_concat_concat \
+  --datadir ./dataset/thorax/syn_data_cbct_gt_v2 \
+  --datatype thorax \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 \
+  --end 360 \
+  --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 300 \
+  --multiscale_decoder \
+  --multiscale_fusion concat \
+  --multiscale_highres_fusion concat \
+  --multiscale_shallow 2d_fuse \
+  --multiscale_shallow_channels 8 \
+  --query_chunk_size 20000 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 \
+  --soft_window_high 240 \
+  --ssim_lambda 0.01 \
+  --device cuda:0
+```
+
+f0、f1融合到32
+```bash
+python train.py \
+  --name thorax_multiscale_e4a_f01_c32_concat_concat \
+  --datadir ./dataset/thorax/syn_data_cbct_gt_v2 \
+  --datatype thorax \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 \
+  --end 360 \
+  --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 300 \
+  --multiscale_decoder \
+  --multiscale_fusion concat \
+  --multiscale_highres_fusion concat \
+  --multiscale_shallow 2d_fuse \
+  --multiscale_shallow_channels 32 \
+  --query_chunk_size 20000 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 \
+  --soft_window_high 240 \
+  --ssim_lambda 0.01 \
+  --device cuda:0
+```
+
+f0和f1直接不融合16+16是分离的
+```bash
+```
+
+
 ## 9. E5：多尺度辅助监督
 
 E5通过E4、E3、E2中间表示各接一个轻量预测Head，使用固定平均池化得到对应尺度的GT，并加入：
@@ -472,13 +537,47 @@ L = L_full
 --multiscale_aux_weights 0.2,0.1,0.05
 ```
 
+在实验E4中发现，concate+concate表现最好，于是依旧在concate+concate + fuse16上做实验E5
+```bash
+python train.py \
+  --name thorax_multiscale_e5_e4a_aux_f01_c16_concat_concat \
+  --datadir ./dataset/thorax/syn_data_cbct_gt_v2 \
+  --datatype thorax \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 \
+  --end 360 \
+  --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 300 \
+  --multiscale_decoder \
+  --multiscale_fusion concat \
+  --multiscale_highres_fusion concat \
+  --multiscale_shallow 2d_fuse \
+  --multiscale_shallow_channels 16 \
+  --use_multiscale_supervision \
+  --multiscale_aux_weights 0.2,0.1,0.05 \
+  --query_chunk_size 20000 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 \
+  --soft_window_high 240 \
+  --ssim_lambda 0.01 \
+  --device cuda:0
+  ```
+
 如需增加跨尺度预测一致性：
 
 ```bash
 --cross_scale_lambda 0.01
 ```
 
-它约束`Down(y_full)≈y_E2`、`Down(y_E2)≈y_E3`和`Down(y_E3)≈y_E4`，不直接约束不同尺度的feature相等。建议先使用0.0，确认辅助L1有效后再尝试0.01～0.05。
+它约束`Down(y_full)≈y_E2`、`Down(y_E2)≈y_E3`和`Down(y_E3)≈y_E4`，不直接约束不同尺度的feature相等。建议先使用0.0，确认辅助L1有效后再尝试0.01～0.05。这样增加了跨尺度预测一致性之后，实验名可为
+```bash
+--name thorax_multiscale_e5_e4a_aux_cross0p01_f01_c16_concat_concat
+```
 
 E5训练示例：
 
@@ -522,6 +621,36 @@ logits_E2 = upsample(logits_E3) + delta_E2
 
 `view_weight_delta_lambda`限制修正量过大，建议从`1e-4`开始。
 
+因为实验thorax_multiscale_e4_a_f01_c16_concat_concat表现最好，故从此基础上做e6实验，实验的命令为:
+```bash
+python train.py \
+  --name thorax_multiscale_e6_hier_e4a_f01_c16_concat_concat \
+  --datadir ./dataset/thorax/syn_data_cbct_gt_v2 \
+  --datatype thorax \
+  --train_scale 4 \
+  --fusion ada \
+  --start 0 \
+  --end 360 \
+  --nviews 20 \
+  --angle_sampling uniform \
+  --is_train \
+  --epochs 300 \
+  --multiscale_decoder \
+  --multiscale_fusion concat \
+  --multiscale_highres_fusion concat \
+  --multiscale_shallow 2d_fuse \
+  --multiscale_shallow_channels 16 \
+  --use_hierarchical_view_weights \
+  --view_weight_delta_lambda 0.0001 \
+  --query_chunk_size 4000 \
+  --bone_lambda 0.05 \
+  --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 \
+  --soft_window_low -160 \
+  --soft_window_high 240 \
+  --ssim_lambda 0.01 \
+  --device cuda:0
+```
 ### 10.2 不确定性门控
 
 ```bash

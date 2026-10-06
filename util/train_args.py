@@ -196,9 +196,12 @@ def parse_args():
     )
     parser.add_argument(
         "--multiscale_shallow",
-        choices=("none", "2d_fuse"),
+        choices=("none", "2d_fuse", "2d_separate"),
         default="none",
-        help="Optional F0/F1 branch; 2d_fuse is reserved for the full-grid implementation.",
+        help=(
+            "Optional F0/F1 branch: 2d_fuse jointly processes F0/F1; "
+            "2d_separate keeps two independent 16-channel branches."
+        ),
     )
     parser.add_argument(
         "--multiscale_shallow_channels",

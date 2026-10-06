@@ -126,6 +126,34 @@ GeometryLift到完整3D网格
 
 该分支显存开销很大，应在E2/E3/E4结构稳定后再使用。
 
+方案3B可使用：
+
+```bash
+--multiscale_shallow 2d_separate
+```
+
+此模式不会在二维阶段拼接F0/F1，而是建立两条互相独立的16通道路径：
+
+```text
+F0(16) → 独立Conv2d Stem → 独立ScaleViewFusion → GeometryLift → E0(16)
+F1(16) → 独立Conv2d Stem → 独立ScaleViewFusion → GeometryLift → E1(16)
+                                      ↓
+                 concat(E2主路径16, E0 16, E1 16) → 3D高分辨率融合
+```
+
+因此，`2d_separate`中的`--multiscale_shallow_channels`不会改变F0/F1的宽度，
+两路始终各为16通道；该参数只影响历史`2d_fuse`模式。若高分辨率融合为
+`gated_add`，两路会先分别投影，再由同一个门控模块联合决定残差注入量。
+该模式适合与E4-A的双`concat`配置比较：
+
+```bash
+--multiscale_shallow 2d_separate \
+--multiscale_fusion concat \
+--multiscale_highres_fusion concat
+```
+
+旧的`none`和`2d_fuse`行为保持不变，已有命令和checkpoint不受影响。
+
 ```bash
 --multiscale_shallow_channels 16
 ```
@@ -733,3 +761,36 @@ E6 加入层级视角权重和uncertainty gate
 - 上采样尺寸是否与volume_resolution严格一致；
 - 是否因为多次GeometryLift导致有效梯度过小；
 - query chunk是否造成了错误的reshape或视角维度处理。
+
+## 13. 方案3B：F0/F1分别保持16通道
+
+使用新增模式：
+
+```bash
+--multiscale_shallow 2d_separate
+```
+
+该模式不在二维阶段拼接F0/F1，而是让两路各自经过16通道的Conv2d Stem、
+独立的`ScaleViewFusion`和GeometryLift，最后在完整分辨率的3D高分辨率端
+与主路径合并。`--multiscale_shallow_channels`不会改变该模式的通道数；两路
+始终各为16通道。原有`none`和`2d_fuse`模式保持不变。
+
+E4-A对应的方案3B命令示例：
+
+```bash
+python train.py \
+  --name thorax_multiscale_e4a_f01_separate16_concat_concat \
+  --datadir ./dataset/thorax/syn_data_cbct_gt_v2 \
+  --datatype thorax --train_scale 4 --fusion ada \
+  --start 0 --end 360 --nviews 20 --angle_sampling uniform \
+  --is_train --epochs 300 --multiscale_decoder \
+  --multiscale_fusion concat --multiscale_highres_fusion concat \
+  --multiscale_shallow 2d_separate \
+  --query_chunk_size 20000 \
+  --bone_lambda 0.05 --bone_lower_hu 300 \
+  --soft_mask_lambda 0.01 --soft_window_low -160 --soft_window_high 240 \
+  --ssim_lambda 0.01 --device cuda:0
+```
+
+如果显存不足，可以只降低`--query_chunk_size`（例如`10000`或`4000`），不
+会改变方案3B的网络结构。

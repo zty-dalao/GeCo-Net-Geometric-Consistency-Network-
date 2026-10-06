@@ -63,6 +63,7 @@ class model(nn.Module):
                 decoder_scale=int(self.decoder_conf.scale),
                 fusion=str(multiscale_fusion),
                 use_shallow_2d_fusion=(str(multiscale_shallow) == "2d_fuse"),
+                shallow_mode=str(multiscale_shallow),
                 shallow_channels=int(multiscale_shallow_channels),
                 highres_fusion=str(multiscale_highres_fusion),
                 use_multiscale_supervision=bool(use_multiscale_supervision),

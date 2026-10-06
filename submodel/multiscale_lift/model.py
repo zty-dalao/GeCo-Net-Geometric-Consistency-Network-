@@ -154,6 +154,7 @@ class MultiScaleLiftDecoder(nn.Module):
         decoder_scale=4,
         fusion="concat",
         use_shallow_2d_fusion=False,
+        shallow_mode=None,
         shallow_channels=16,
         highres_fusion="gated_add",
         use_multiscale_supervision=False,
@@ -168,7 +169,13 @@ class MultiScaleLiftDecoder(nn.Module):
         self.scale = int(decoder_scale)
         self.inplanes = 32
         self.fusion_mode = str(fusion)
-        self.use_shallow_2d_fusion = bool(use_shallow_2d_fusion)
+        # Keep the old boolean argument for callers using the pre-3B API.
+        if shallow_mode is None:
+            shallow_mode = "2d_fuse" if bool(use_shallow_2d_fusion) else "none"
+        self.shallow_mode = str(shallow_mode)
+        if self.shallow_mode not in {"none", "2d_fuse", "2d_separate"}:
+            raise ValueError("multiscale shallow mode must be 'none', '2d_fuse' or '2d_separate'")
+        self.use_shallow_2d_fusion = self.shallow_mode != "none"
         self.shallow_channels = int(shallow_channels)
         self.highres_fusion = str(highres_fusion)
         self.use_multiscale_supervision = bool(use_multiscale_supervision)
@@ -195,7 +202,7 @@ class MultiScaleLiftDecoder(nn.Module):
             self.aux_e4 = AuxiliaryHead(128)
             self.aux_e3 = AuxiliaryHead(64)
             self.aux_e2 = AuxiliaryHead(32)
-        if self.use_shallow_2d_fusion:
+        if self.shallow_mode == "2d_fuse":
             self.shallow_2d = nn.Sequential(
                 nn.Conv2d(32, self.shallow_channels, 1),
                 nn.GELU(),
@@ -227,6 +234,40 @@ class MultiScaleLiftDecoder(nn.Module):
             else:
                 raise ValueError("highres fusion must be 'concat' or 'gated_add'")
             self.shallow_view_fusion = ScaleViewFusion(self.shallow_channels)
+        elif self.shallow_mode == "2d_separate":
+            # Scheme 3B: F0/F1 remain independent 16-channel branches until
+            # the final high-resolution 3D fusion block.
+            separate_channels = 16
+            self.separate_shallow_channels = separate_channels
+            self.shallow_2d_f0 = nn.Sequential(
+                nn.Conv2d(16, separate_channels, 1), nn.GELU(),
+                nn.Conv2d(separate_channels, separate_channels, 3, padding=1), nn.GELU(),
+            )
+            self.shallow_2d_f1 = nn.Sequential(
+                nn.Conv2d(16, separate_channels, 1), nn.GELU(),
+                nn.Conv2d(separate_channels, separate_channels, 3, padding=1), nn.GELU(),
+            )
+            self.shallow_view_fusion_f0 = ScaleViewFusion(separate_channels)
+            self.shallow_view_fusion_f1 = ScaleViewFusion(separate_channels)
+            self.shallow_project_f0 = nn.Conv3d(separate_channels, 16, 1)
+            self.shallow_project_f1 = nn.Conv3d(separate_channels, 16, 1)
+            if self.highres_fusion == "concat":
+                self.shallow_separate_concat = nn.Sequential(
+                    nn.Conv3d(48, 16, 3, padding=1), nn.GELU(),
+                    nn.Conv3d(16, 16, 3, padding=1), nn.GELU(),
+                )
+            elif self.highres_fusion == "gated_add":
+                gate_in = 48 + (2 if self.use_uncertainty_gate else 0)
+                self.shallow_separate_gate = nn.Sequential(
+                    nn.Conv3d(gate_in, 16, 1), nn.GELU(),
+                    nn.Conv3d(16, 16, 1), nn.Sigmoid(),
+                )
+                self.shallow_separate_refine = nn.Sequential(
+                    nn.Conv3d(16, 16, 3, padding=1), nn.GELU(),
+                )
+                self.shallow_separate_alpha = nn.Parameter(torch.zeros(()))
+            else:
+                raise ValueError("highres fusion must be 'concat' or 'gated_add'")
 
     @staticmethod
     def _project_uv(xyz, poses, image_shape):
@@ -414,7 +455,7 @@ class MultiScaleLiftDecoder(nn.Module):
             })
         x = self.up_full(x, xyz_full.shape[:3])
 
-        if self.use_shallow_2d_fusion:
+        if self.shallow_mode == "2d_fuse":
             shallow = self.shallow_2d(torch.cat([feature_maps[0], feature_maps[1]], dim=1))
             if xyz_full is None:
                 raise ValueError("shallow 2D fusion requires xyz_full from the renderer")
@@ -442,6 +483,46 @@ class MultiScaleLiftDecoder(nn.Module):
                 gate = self.shallow_gate(torch.cat(gate_inputs, dim=1))
                 correction = self.shallow_refine(gate * projected)
                 x = x + self.shallow_alpha * correction
+        elif self.shallow_mode == "2d_separate":
+            # Scheme 3B: do not concatenate F0/F1 in 2D. Each 16-channel
+            # branch has its own stem, view fusion and geometry lift.
+            shallow_f0 = self.shallow_2d_f0(feature_maps[0])
+            shallow_f1 = self.shallow_2d_f1(feature_maps[1])
+            if self.use_uncertainty_gate and self.highres_fusion == "gated_add":
+                e0, _, uncertainty0, delta0 = self._lift_feature(
+                    shallow_f0, self.shallow_view_fusion_f0, poses, image_shape, xyz_full,
+                    return_details=True, collect_logits=False,
+                )
+                e1, _, uncertainty1, delta1 = self._lift_feature(
+                    shallow_f1, self.shallow_view_fusion_f1, poses, image_shape, xyz_full,
+                    return_details=True, collect_logits=False,
+                )
+                uncertainty01 = (uncertainty0 + uncertainty1) / 2.0
+                aux["view_delta_l1"] = (
+                    aux["view_delta_l1"] * 3.0 + (delta0 + delta1) / 2.0
+                ) / 4.0
+                aux["uncertainty_e01_mean"] = uncertainty01.mean()
+            else:
+                e0 = self._lift_feature(
+                    shallow_f0, self.shallow_view_fusion_f0, poses, image_shape, xyz_full,
+                )
+                e1 = self._lift_feature(
+                    shallow_f1, self.shallow_view_fusion_f1, poses, image_shape, xyz_full,
+                )
+                uncertainty01 = None
+            projected0 = self.shallow_project_f0(e0)
+            projected1 = self.shallow_project_f1(e1)
+            if self.highres_fusion == "concat":
+                x = self.shallow_separate_concat(
+                    torch.cat([x, projected0, projected1], dim=1)
+                )
+            else:
+                gate_inputs = [x, projected0, projected1]
+                if self.use_uncertainty_gate:
+                    gate_inputs.append(uncertainty01)
+                gate = self.shallow_separate_gate(torch.cat(gate_inputs, dim=1))
+                correction = self.shallow_separate_refine(projected0 + projected1)
+                x = x + self.shallow_separate_alpha * gate * correction
         output = self.output(x)
         if return_aux:
             return output, aux

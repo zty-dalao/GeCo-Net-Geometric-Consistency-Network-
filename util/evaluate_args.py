@@ -63,7 +63,9 @@ def parse_args():
         help="Build the experimental E2/E3/E4 geometry-aware multiscale decoder",
     )
     parser.add_argument("--multiscale_fusion", choices=("concat", "gated_add"), default="concat")
-    parser.add_argument("--multiscale_shallow", choices=("none", "2d_fuse"), default="none")
+    parser.add_argument(
+        "--multiscale_shallow", choices=("none", "2d_fuse", "2d_separate"), default="none",
+    )
     parser.add_argument("--multiscale_shallow_channels", type=int, default=16)
     parser.add_argument("--multiscale_highres_fusion", choices=("concat", "gated_add"), default="gated_add")
     parser.add_argument("--use_multiscale_supervision", action="store_true")

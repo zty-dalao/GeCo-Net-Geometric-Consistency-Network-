@@ -189,6 +189,15 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--fullres_multiscale_decoder",
+        action="store_true",
+        help=(
+            "Use the full-grid F0-F4 lift decoder: every scale is reconstructed "
+            "on xyz_full, processed by concat-residual 3-D blocks, and joined "
+            "before the single 1x1x1 output convolution."
+        ),
+    )
+    parser.add_argument(
         "--multiscale_fusion",
         choices=("concat", "gated_add"),
         default="concat",
@@ -399,14 +408,22 @@ def parse_args():
 
     args = parser.parse_args()
 
-    if args.multiscale_decoder and (args.use_adapter or args.use_prior_completion):
+    if args.multiscale_decoder and args.fullres_multiscale_decoder:
         parser.error(
-            "--multiscale_decoder 当前实验实现不与 --use_adapter 或 "
+            "--multiscale_decoder and --fullres_multiscale_decoder cannot be enabled together"
+        )
+    if (
+        args.multiscale_decoder or args.fullres_multiscale_decoder
+    ) and (args.use_adapter or args.use_prior_completion):
+        parser.error(
+            "多尺度Decoder当前实验实现不与 --use_adapter 或 "
             "--use_prior_completion 同时使用；请先完成E2/E3/E4基础消融。"
         )
-    if args.multiscale_decoder and args.pretrained_decoder:
+    if (
+        args.multiscale_decoder or args.fullres_multiscale_decoder
+    ) and args.pretrained_decoder:
         parser.error(
-            "--multiscale_decoder 使用独立Decoder结构，不能加载原SRGAN的 "
+            "多尺度Decoder使用独立结构，不能加载原SRGAN的 "
             "--pretrained_decoder；如需初始化，请只使用 --pretrained_backbone。"
         )
     if args.multiscale_decoder:
@@ -424,6 +441,17 @@ def parse_args():
         or args.use_uncertainty_gate
     ):
         parser.error("E3-E6开关必须与 --multiscale_decoder 一起使用")
+    if args.fullres_multiscale_decoder and (
+        args.use_multiscale_supervision
+        or args.use_hierarchical_view_weights
+        or args.use_uncertainty_gate
+        or args.cross_scale_lambda > 0
+        or args.view_weight_delta_lambda > 0
+    ):
+        parser.error(
+            "fullres_multiscale_decoder当前只记录结构诊断指标；"
+            "不要同时开启原multiscale_lift的E5/E6参数"
+        )
     if args.use_prior_completion and not args.pretrained_decoder:
         parser.error(
             "--use_prior_completion requires --pretrained_decoder to construct "
@@ -498,6 +526,9 @@ def parse_args():
         'pretrained_decoder: ', str(args.pretrained_decoder), '\n',
         'prior_encoder_type: ', str(args.prior_encoder_type), '\n',
         'pretrained_backbone: ', str(args.pretrained_backbone), '\n',
+        'multiscale_decoder: ', "yes" if args.multiscale_decoder else "no", '\n',
+        'fullres_multiscale_decoder: ',
+        "yes" if args.fullres_multiscale_decoder else "no", '\n',
         'use_adapter: ', "yes" if args.use_adapter else "no", '\n',
         'adapter_hidden_channels: ', str(args.adapter_hidden_channels), '\n',
         'adapter_type: ', str(args.adapter_type), '\n',

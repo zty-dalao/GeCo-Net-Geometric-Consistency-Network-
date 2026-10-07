@@ -77,7 +77,13 @@ class trainer():
             self.phase_c_hold_epochs,
         ))
         self.transfer_schedule = args.transfer_schedule
-        self.multiscale_decoder = bool(getattr(args, "multiscale_decoder", False))
+        self.fullres_multiscale_decoder = bool(
+            getattr(args, "fullres_multiscale_decoder", False)
+        )
+        self.multiscale_decoder = bool(
+            getattr(args, "multiscale_decoder", False)
+            or self.fullres_multiscale_decoder
+        )
         self.use_multiscale_supervision = bool(
             getattr(args, "use_multiscale_supervision", False)
         )
@@ -347,8 +353,22 @@ class trainer():
             optimizer_groups = [
                 {"params": encoder_early_parameters, "lr": init_lr, "name": "encoder_early"},
                 {"params": encoder_late_parameters, "lr": init_lr, "name": "encoder_late"},
-                {"params": list(self.G_render.decoder.parameters()), "lr": init_lr, "name": "decoder_multiscale"},
             ]
+            if self.fullres_multiscale_decoder and aggregator_parameters:
+                optimizer_groups.append({
+                    "params": aggregator_parameters,
+                    "lr": init_lr,
+                    "name": "aggregator_fullres",
+                })
+            optimizer_groups.append({
+                "params": list(self.G_render.decoder.parameters()),
+                "lr": init_lr,
+                "name": (
+                    "decoder_fullres_multiscale"
+                    if self.fullres_multiscale_decoder
+                    else "decoder_multiscale"
+                ),
+            })
         else:
             decoder_core_parameters = list(itertools.chain(
                 self.G_render.decoder.in_blk.parameters(),
@@ -1022,6 +1042,15 @@ class trainer():
         ):
             if key in aux:
                 values[key] = aux[key]
+        # The full-resolution decoder has no auxiliary prediction loss, but it
+        # exposes scalar activation diagnostics through the same aux channel.
+        for key, value in aux.items():
+            if (
+                key.startswith("fullres_")
+                and torch.is_tensor(value)
+                and value.numel() == 1
+            ):
+                values[key] = value
         values["multiscale_aux_loss"] = total
         return total, values
 
@@ -1427,6 +1456,11 @@ class trainer():
             if key in loss_dict:
                 self.writer.add_scalar(
                     f"step/train_{key}", loss_dict[key], self.global_step,
+                )
+        for key, value in loss_dict.items():
+            if key.startswith("fullres_"):
+                self.writer.add_scalar(
+                    f"step/train_{key}", value, self.global_step,
                 )
         self.writer.add_scalar("step/latent_weight", latent_weight, self.global_step)
         self.writer.add_scalar("step/prior_anchor_weight", anchor_weight, self.global_step)

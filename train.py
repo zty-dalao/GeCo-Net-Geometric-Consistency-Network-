@@ -68,6 +68,7 @@ if __name__ == '__main__':
         use_multiscale_supervision=args.use_multiscale_supervision,
         use_hierarchical_view_weights=args.use_hierarchical_view_weights,
         use_uncertainty_gate=args.use_uncertainty_gate,
+        fullres_multiscale_decoder=args.fullres_multiscale_decoder,
     )
     if args.pretrained_backbone is not None and not args.resume:
         backbone_checkpoint = torch.load(args.pretrained_backbone, map_location="cpu")

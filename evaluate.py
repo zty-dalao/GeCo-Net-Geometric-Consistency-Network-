@@ -77,6 +77,14 @@ def test_step():
     loss_dict['soft_mask_loss'] = round((soft_raw * args.soft_mask_lambda).item(), 8)
     loss_dict['ssim_loss_raw'] = round(ssim_raw.item(), 8)
     loss_dict['ssim_loss'] = round((ssim_raw * args.ssim_lambda).item(), 8)
+    aux = getattr(G_render, "last_multiscale_aux", None) or {}
+    for key, value in aux.items():
+        if (
+            key.startswith("fullres_")
+            and torch.is_tensor(value)
+            and value.numel() == 1
+        ):
+            loss_dict[key] = round(value.item(), 8)
     return loss_dict
 
 def fmt_loss_str(losses):
@@ -127,6 +135,7 @@ if __name__ == '__main__':
         use_multiscale_supervision=args.use_multiscale_supervision,
         use_hierarchical_view_weights=args.use_hierarchical_view_weights,
         use_uncertainty_gate=args.use_uncertainty_gate,
+        fullres_multiscale_decoder=args.fullres_multiscale_decoder,
     )
     if args.resume_name is not None:
         model_path = os.path.join(checkpoints_path, 'ckpt_history', 'ckpt_'+args.resume_name)
@@ -204,6 +213,7 @@ if __name__ == '__main__':
         'soft_mask_raw': [], 'soft_mask_loss': [],
         'ssim_loss_raw': [], 'ssim_loss': [],
     }
+    fullres_metric_lists = {}
     with torch.no_grad():
         for data in evaluate_data_loader:
             obj_index = data["obj_index"][0]
@@ -217,6 +227,9 @@ if __name__ == '__main__':
             ssim_3d_clamp_list.append(test_losses['ssim_3d_clamp'])          
             for key in optional_loss_lists:
                 optional_loss_lists[key].append(test_losses[key])
+            for key, value in test_losses.items():
+                if key.startswith('fullres_'):
+                    fullres_metric_lists.setdefault(key, []).append(value)
             f_test_psnr_batch = open(logs_path + '/metric_batch.txt', mode='a')
             f_test_psnr_batch.write(now.strftime('%Y-%m-%d %H:%M:%S') + test_loss_str + '\n')
             f_test_psnr_batch.close()
@@ -227,6 +240,9 @@ if __name__ == '__main__':
         avg_dict['ssim_3d_clamp_mean'] = np.mean(ssim_3d_clamp_list)
         avg_dict['ssim_3d_clamp_std'] = np.std(ssim_3d_clamp_list)
         for key, values in optional_loss_lists.items():
+            avg_dict[key + '_mean'] = np.mean(values)
+            avg_dict[key + '_std'] = np.std(values)
+        for key, values in fullres_metric_lists.items():
             avg_dict[key + '_mean'] = np.mean(values)
             avg_dict[key + '_std'] = np.std(values)
         avg_dict_str = fmt_loss_str(avg_dict)

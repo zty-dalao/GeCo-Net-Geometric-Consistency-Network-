@@ -8,6 +8,7 @@ from submodel.adapter import LatentAdapter
 from submodel.adapter_with_transformer import TransformerLatentAdapter
 from submodel.continuous_prior_completion import ContinuousPriorCompletion
 from submodel.multiscale_lift import MultiScaleLiftDecoder
+from submodel.fullres_multiscale_lift import FullResolutionMultiScaleLiftDecoder
 
 # Main Model
 class model(nn.Module):
@@ -40,6 +41,7 @@ class model(nn.Module):
         use_multiscale_supervision=False,
         use_hierarchical_view_weights=False,
         use_uncertainty_gate=False,
+        fullres_multiscale_decoder=False,
     ):
         super(model, self).__init__()
         self.device = device
@@ -53,7 +55,24 @@ class model(nn.Module):
         self.fusion = model_conf['fusion']
         self.encoder = ResEncoder(self.encoder_conf).to(device)
         self.use_multiscale_decoder = bool(multiscale_decoder)
-        if self.use_multiscale_decoder:
+        self.use_fullres_multiscale_decoder = bool(fullres_multiscale_decoder)
+        if self.use_multiscale_decoder and self.use_fullres_multiscale_decoder:
+            raise ValueError(
+                "--multiscale_decoder and --fullres_multiscale_decoder are mutually exclusive"
+            )
+        if self.use_fullres_multiscale_decoder:
+            if use_adapter or use_prior_completion:
+                raise ValueError(
+                    "fullres_multiscale_decoder has its own full-grid latent path; "
+                    "disable --use_adapter and --use_prior_completion."
+                )
+            self.decoder = FullResolutionMultiScaleLiftDecoder(
+                decoder_scale=int(self.decoder_conf.scale),
+                query_chunk_size=int(query_chunk_size),
+                use_query_checkpoint=bool(use_query_checkpoint),
+                use_block_checkpoint=bool(use_query_checkpoint),
+            ).to(device)
+        elif self.use_multiscale_decoder:
             if use_adapter or use_prior_completion:
                 raise ValueError(
                     "multiscale_decoder currently uses its own E2/E3/E4 latent path; "
@@ -138,6 +157,10 @@ class model(nn.Module):
 
     def _query_and_fuse_points(self, pnts):
         latent = self.encoder.queryfeature(pnts)
+        return self._fuse_views(latent)
+
+    def _fuse_views(self, latent):
+        """Apply the configured original multi-view Aggregator."""
         if self.fusion == 'max':
             return torch.max(latent, dim=0)[0]
         if self.fusion == 'mean':
@@ -166,6 +189,22 @@ class model(nn.Module):
         return h.reshape(1,-1,x,y,z)                                # ③ 低分辨率特征体积 [1, C, X/4, Y/4, Z/4]
 
     def forward(self, xyz_world, return_latent=False, xyz_full_world=None):
+        if self.use_fullres_multiscale_decoder:
+            outputs, aux = self.decoder(
+                self.encoder.latent_list,
+                self.encoder.poses,
+                self.encoder.image_shape,
+                xyz_full=xyz_full_world,
+                view_fuser=self._fuse_views,
+                return_aux=True,
+            )
+            self.last_aligned_latent = aux["latent"]
+            self.last_multiscale_aux = aux
+            outputs = outputs[0, 0, :, :, :].transpose(0, 2)
+            outputs = self.last_layer_act(outputs)
+            if return_latent:
+                return outputs, self.last_aligned_latent
+            return outputs
         if self.use_multiscale_decoder:
             outputs, aux = self.decoder(
                 self.encoder.latent_list,

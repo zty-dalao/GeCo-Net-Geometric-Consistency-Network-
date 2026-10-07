@@ -62,6 +62,10 @@ def parse_args():
         "--multiscale_decoder", action="store_true",
         help="Build the experimental E2/E3/E4 geometry-aware multiscale decoder",
     )
+    parser.add_argument(
+        "--fullres_multiscale_decoder", action="store_true",
+        help="Build the full-grid F0-F4 concat-residual lift decoder",
+    )
     parser.add_argument("--multiscale_fusion", choices=("concat", "gated_add"), default="concat")
     parser.add_argument(
         "--multiscale_shallow", choices=("none", "2d_fuse", "2d_separate"), default="none",
@@ -114,9 +118,15 @@ def parse_args():
 
     args = parser.parse_args()
 
-    if args.multiscale_decoder and (args.use_adapter or args.use_prior_completion):
+    if args.multiscale_decoder and args.fullres_multiscale_decoder:
         parser.error(
-            "--multiscale_decoder 当前不与 --use_adapter 或 --use_prior_completion 同时使用"
+            "--multiscale_decoder and --fullres_multiscale_decoder cannot be enabled together"
+        )
+    if (
+        args.multiscale_decoder or args.fullres_multiscale_decoder
+    ) and (args.use_adapter or args.use_prior_completion):
+        parser.error(
+            "多尺度Decoder当前不与 --use_adapter 或 --use_prior_completion 同时使用"
         )
     if not args.multiscale_decoder and (
         args.use_multiscale_supervision
@@ -167,6 +177,11 @@ def parse_args():
         'soft_mask_lambda: ', str(args.soft_mask_lambda), '\n',
         'soft_window: [', str(args.soft_window_low), ', ', str(args.soft_window_high), '] HU\n',
         'ssim_lambda: ', str(args.ssim_lambda), '\n',
+        'multiscale_decoder: ', "yes" if args.multiscale_decoder else "no", '\n',
+        'fullres_multiscale_decoder: ',
+        "yes" if args.fullres_multiscale_decoder else "no", '\n',
+        'query_chunk_size: ', str(args.query_chunk_size), '\n',
+        'amp: ', "no" if args.no_amp else "yes", '\n',
         'use_adapter: ', "yes" if args.use_adapter else "no", '\n',
         'adapter_hidden_channels: ', str(args.adapter_hidden_channels), '\n',
         'adapter_type: ', str(args.adapter_type), '\n',

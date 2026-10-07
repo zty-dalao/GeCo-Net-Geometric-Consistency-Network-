@@ -159,6 +159,28 @@ python evaluate.py \
 
 ## 5. 诊断指标
 
+### 5.1 Train / Val / Test 重建质量
+
+训练期间会对train、val、test三个数据集分别计算并写入TensorBoard：
+
+```text
+epoch/train_psnr_3d_clamp
+epoch/train_ssim_3d_clamp
+epoch/val_psnr_3d_clamp
+epoch/val_ssim_3d_clamp
+epoch/test_psnr_3d_clamp
+epoch/test_ssim_3d_clamp
+```
+
+train指标每个训练epoch统计一次；val和test指标分别按照`--val-every`与
+`--test-every`指定的周期统计。三组指标均使用clamp后的三维预测体，并沿用项目
+当前的`psnr_3d_clamp` / `ssim_3d_clamp`计算口径。
+
+三维SSIM的计算开销明显高于PSNR。加入train SSIM后，每个训练样本都会额外执行
+该指标计算，因此单个epoch的耗时会有所增加。
+
+### 5.2 Full-resolution结构诊断
+
 训练时以下指标写入TensorBoard的`step/train_*`，评估时写入每病例和汇总日志：
 
 ```text

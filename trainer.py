@@ -1494,8 +1494,15 @@ class trainer():
                                                    volume_origin=volume_origin, volume_phy=volume_phy,
                                                    scale=self.G_render.decoder.scale, device=device)
             volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
-            # 3d ssim calculation is too slow, so we only calculate psnr
             loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
+            loss_dict['ssim_3d_clamp'] = round(
+                get_ssim_3d(
+                    data_norm(volume_predict_clamp),
+                    data_norm(volume_gt),
+                    data_range=1,
+                ),
+                8,
+            )
         # Restore the exact mixed train/eval state of the current phase. This
         # also reapplies the optional Decoder-BN running-statistics policy.
         self._apply_training_stage(epoch)
@@ -1717,7 +1724,8 @@ class trainer():
                 # train with the train dataset
                 print('Network Training')
                 train_batch = 0
-                train_psnr_3d_clamp = 0 
+                train_psnr_3d_clamp = 0
+                train_ssim_3d_clamp = 0
                 train_loss_sums = {key: 0.0 for key in self._tracked_loss_keys()}
                 for train_data in self.train_data_loader:
                     train_losses = self.train_step(train_data, epoch)
@@ -1734,23 +1742,40 @@ class trainer():
 
                     # batch psnr
                     train_psnr_3d_clamp = train_psnr_3d_clamp + train_losses['psnr_3d_clamp']
+                    # batch ssim
+                    train_ssim_3d_clamp = train_ssim_3d_clamp + train_losses['ssim_3d_clamp']
                     for key in self._tracked_loss_keys():
                         train_loss_sums[key] += train_losses[key]
 
                 # epoch psnr
                 train_psnr_3d_clamp = train_psnr_3d_clamp / train_batch
+                # epoch ssim
+                train_ssim_3d_clamp = train_ssim_3d_clamp / train_batch
                 now = datetime.datetime.now()
                 f_train_psnr = open(self.logs_path + '/train_metric.txt', mode='a')
                 f_train_psnr.write(
-                    now.strftime('%Y-%m-%d %H:%M:%S') + ' Epoch:' + str(epoch) + ' train_psnr_3d_clamp:' + str(train_psnr_3d_clamp) + '\n')
+                    now.strftime('%Y-%m-%d %H:%M:%S')
+                    + ' Epoch:' + str(epoch)
+                    + ' train_psnr_3d_clamp:' + str(train_psnr_3d_clamp)
+                    + ' train_ssim_3d_clamp:' + str(train_ssim_3d_clamp)
+                    + '\n'
+                )
                 f_train_psnr.close()
-                print("*** train:", now.strftime('%Y-%m-%d %H:%M:%S'), "Epoch:", epoch, 'train_psnr_3d_clamp:', str(train_psnr_3d_clamp))
+                print(
+                    "*** train:", now.strftime('%Y-%m-%d %H:%M:%S'),
+                    "Epoch:", epoch,
+                    'train_psnr_3d_clamp:', str(train_psnr_3d_clamp),
+                    'train_ssim_3d_clamp:', str(train_ssim_3d_clamp),
+                )
                 self._write_epoch_tensorboard(
                     "train",
                     train_loss_sums,
                     train_batch,
                     epoch,
-                    {"psnr_3d_clamp": train_psnr_3d_clamp},
+                    {
+                        "psnr_3d_clamp": train_psnr_3d_clamp,
+                        "ssim_3d_clamp": train_ssim_3d_clamp,
+                    },
                 )
 
                 # network saving

@@ -4,8 +4,8 @@ Every encoder level is sampled on the same full physical 3-D grid. The
 per-view features are concatenated in the original encoder order and fused by
 the main model's existing Aggregator. The fused 256-channel volume is then
 split back into F0..F4 channel groups, processed by independent concat-residual
-blocks, concatenated coarse-to-fine, and reconstructed with one final 1x1x1
-convolution.
+blocks, concatenated coarse-to-fine, and reconstructed directly with one final
+1x1x1 convolution. H01 deliberately has no additional residual block.
 """
 
 import torch
@@ -65,7 +65,6 @@ class FullResolutionMultiScaleLiftDecoder(nn.Module):
             ConcatResidualBlock3D(channels)
             for channels in self.feature_channels
         )
-        self.final_block = ConcatResidualBlock3D(self.inplanes)
         # Deliberately the only 1x1x1 convolution in this decoder.
         self.output = nn.Conv3d(self.inplanes, 1, 1)
 
@@ -214,19 +213,18 @@ class FullResolutionMultiScaleLiftDecoder(nn.Module):
                 f"got {h01.shape[1]}"
             )
 
-        final_feature = self._run_block(self.final_block, h01)
-        output = self.output(final_feature)
+        # H01 already contains all five independently refined scales. Mapping
+        # it directly avoids another full-resolution 256-channel residual
+        # block and its dominant activation peak.
+        output = self.output(h01)
 
-        final_sample = self._sample_for_metrics(final_feature)
         h01_sample = self._sample_for_metrics(h01)
         aux.update({
             "fullres_h3_abs_mean": self._sample_for_metrics(h3).abs().mean(),
             "fullres_h2_abs_mean": self._sample_for_metrics(h2).abs().mean(),
             "fullres_h01_abs_mean": h01_sample.abs().mean(),
-            "fullres_final_abs_mean": final_sample.abs().mean(),
-            "fullres_final_change_l1": (final_sample - h01_sample).abs().mean(),
             "fullres_output_abs_mean": self._sample_for_metrics(output).abs().mean(),
-            "latent": final_feature,
+            "latent": h01,
         })
         if return_aux:
             return output, aux

@@ -41,13 +41,12 @@ Ri = GELU(Conv3d(concat(Xi, branch)))
 H3  = concat(R4, R3)          # 128 + 64 = 192
 H2  = concat(H3, R2)          # 192 + 32 = 224
 H01 = concat(H2, R1, R0)      # 224 + 16 + 16 = 256
-
-Hfinal = ConcatResidualBlock3D(H01)  # 256 → 512 → 256
-output = Conv3d(Hfinal, 256 → 1, kernel_size=1)
+output = Conv3d(H01, 256 → 1, kernel_size=1)
 ```
 
 `output`返回主模型后继续使用原配置的`last_layer_act`，当前配置为GELU。
-`output`层是该子模块唯一的`1×1×1 Conv3d`。
+`output`层是该子模块唯一的`1×1×1 Conv3d`。H01后不再设置残差块，直接映射为
+单通道衰减体积。
 
 ## 2. 与原Aggregator的关系
 
@@ -190,8 +189,6 @@ fullres_r0_change_l1 ... fullres_r4_change_l1
 fullres_h3_abs_mean
 fullres_h2_abs_mean
 fullres_h01_abs_mean
-fullres_final_abs_mean
-fullres_final_change_l1
 fullres_output_abs_mean
 ```
 
@@ -199,8 +196,7 @@ fullres_output_abs_mean
 - `r*_abs_mean`：各尺度拼接式残差块输出的平均绝对值。
 - `r*_change_l1`：残差块输出相对输入的平均绝对变化。
 - `h*_abs_mean`：逐级拼接特征的平均绝对值。
-- `final_change_l1`：最终256通道残差块改变H01的幅度。
-- `output_abs_mean`：最后单通道、进入主模型GELU之前的平均绝对值。
+- `output_abs_mean`：H01经最后单通道卷积、进入主模型GELU之前的平均绝对值。
 
 为避免指标统计额外占用大量显存，诊断值在空间维每隔8个体素抽样计算；它们只
 用于观察激活是否消失、爆炸或被某一层支配，不参与损失。

@@ -25,10 +25,14 @@ class localfusor(nn.Module):
             self.act
         )
 
-    def forward(self, latent):   # [nviews, C, npoints]
+    def forward(self, latent, view_bias=None):   # [nviews, C, npoints]
         feat = latent.transpose(1,2)  # [nviews, npoints, C]
         feat = self.input_fc(feat)
-        weight = F.softmax(self.weight_fc(feat),dim=0)
+        logits = self.weight_fc(feat)
+        if view_bias is not None:
+            logits = logits + view_bias.unsqueeze(1)
+        weight = F.softmax(logits,dim=0)
+        self.last_view_weights = weight.detach()
         weighted_feat = torch.sum(feat*weight,dim=0)
         output_feat = self.output_fc(weighted_feat).transpose(0,1)
         return output_feat  # [C, npoints]
@@ -56,12 +60,16 @@ class meanfusor(nn.Module):
             self.act
         )
     
-    def forward(self, latent):
+    def forward(self, latent, view_bias=None):
         N = latent.shape[0]
         mean = torch.mean(latent,dim=0).repeat(N,1,1)
         feat = torch.cat([latent,mean],dim=1).transpose(1,2)
         global_feat = self.input_fc(feat)
-        weight = F.softmax(self.weight_fc(global_feat),dim=0)
+        logits = self.weight_fc(global_feat)
+        if view_bias is not None:
+            logits = logits + view_bias.unsqueeze(1)
+        weight = F.softmax(logits,dim=0)
+        self.last_view_weights = weight.detach()
         weighted_global_feat = torch.sum(global_feat*weight,dim=0)
         output_feat = self.output_fc(weighted_global_feat).transpose(0,1)
         return output_feat
@@ -89,12 +97,16 @@ class varfusor(nn.Module):
             self.act
         )
     
-    def forward(self, latent):
+    def forward(self, latent, view_bias=None):
         N = latent.shape[0]
         var = torch.var(latent,dim=0).repeat(N,1,1)
         feat = torch.cat([latent,var],dim=1).transpose(1,2)
         global_feat = self.input_fc(feat)
-        weight = F.softmax(self.weight_fc(global_feat),dim=0)
+        logits = self.weight_fc(global_feat)
+        if view_bias is not None:
+            logits = logits + view_bias.unsqueeze(1)
+        weight = F.softmax(logits,dim=0)
+        self.last_view_weights = weight.detach()
         weighted_global_feat = torch.sum(global_feat*weight,dim=0)
         output_feat = self.output_fc(weighted_global_feat).transpose(0,1)
         return output_feat
@@ -123,13 +135,17 @@ class adafusor(nn.Module):
             self.act
         )
 
-    def forward(self, latent):
+    def forward(self, latent, view_bias=None):
         N = latent.shape[0]
         mean = torch.mean(latent,dim=0).repeat(N,1,1)
         var = torch.var(latent,dim=0).repeat(N,1,1)
         feat = torch.cat([latent,mean,var],dim=1).transpose(1,2)
         global_feat = self.input_fc(feat)
-        weight = F.softmax(self.weight_fc(global_feat),dim=0)
+        logits = self.weight_fc(global_feat)
+        if view_bias is not None:
+            logits = logits + view_bias.unsqueeze(1)
+        weight = F.softmax(logits,dim=0)
+        self.last_view_weights = weight.detach()
         weighted_global_feat = torch.sum(global_feat*weight,dim=0)
         output_feat = self.output_fc(weighted_global_feat).transpose(0,1)
         return output_feat

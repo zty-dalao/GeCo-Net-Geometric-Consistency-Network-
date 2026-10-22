@@ -198,6 +198,59 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--quaternion_mode", choices=("none", "fusion", "calibration", "joint"),
+        default="none",
+        help="Quaternion extension: view fusion, pose calibration, or both.",
+    )
+    parser.add_argument("--quaternion_use_translation", action="store_true")
+    parser.add_argument(
+        "--quaternion_embedding", choices=("absolute_q", "relative_q"),
+        default="relative_q",
+    )
+    parser.add_argument("--pose_refine_max_views", type=int, default=256)
+    parser.add_argument("--pose_refine_max_angle_deg", type=float, default=1.0)
+    parser.add_argument(
+        "--pose_delta_max_angle",
+        dest="pose_refine_max_angle_deg",
+        type=float,
+        default=1.0,
+        help="Alias of --pose_refine_max_angle_deg (degrees).",
+    )
+    parser.add_argument("--pose_refine_max_translation", type=float, default=1.0)
+    parser.add_argument(
+        "--pose_delta_max_translation",
+        dest="pose_refine_max_translation",
+        type=float,
+        default=1.0,
+        help="Alias of --pose_refine_max_translation (mm).",
+    )
+    parser.add_argument("--pose_regularization_weight", type=float, default=0.0)
+    parser.add_argument("--pose_refine_rotation", action="store_true", default=True)
+    parser.add_argument(
+        "--no_pose_refine_rotation",
+        dest="pose_refine_rotation",
+        action="store_false",
+        help="Freeze the rotation correction (B2-style ablation).",
+    )
+    parser.add_argument("--pose_refine_translation", action="store_true", default=True)
+    parser.add_argument(
+        "--no_pose_refine_translation",
+        dest="pose_refine_translation",
+        action="store_false",
+        help="Freeze the translation correction (B1-style ablation).",
+    )
+    parser.add_argument(
+        "--projection_loss_weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Extra weight for the 2-D forward-projection ray loss. It is added "
+            "on top of --mse_lambda_2d and only applied when a PoseRefiner is "
+            "active, so the corrected geometry is scored in the projection "
+            "domain (stage B4)."
+        ),
+    )
+    parser.add_argument(
         "--multiscale_fusion",
         choices=("concat", "gated_add"),
         default="concat",
@@ -477,6 +530,15 @@ def parse_args():
         )
     if args.legacy_stage3_backbone_lr_factor < 0:
         parser.error("--legacy_stage3_backbone_lr_factor must be non-negative")
+    if args.projection_loss_weight < 0:
+        parser.error("--projection_loss_weight must be non-negative")
+    if args.projection_loss_weight > 0 and args.quaternion_mode not in (
+        "calibration", "joint",
+    ):
+        parser.error(
+            "--projection_loss_weight (stage B4) requires --quaternion_mode "
+            "calibration or joint so the corrected geometry is used"
+        )
     if min(
         args.completion_lr_factor,
         args.completion_residual_lambda,
@@ -521,6 +583,21 @@ def parse_args():
                      'mse_lambda_2d: ', str(conf['train.G_loss.mse_lambda_2d']), '\n',
                      'mse_lambda_3d: ', str(conf['train.G_loss.mse_lambda_3d']), '\n',
                      'gd1_lambda: ', str(conf['train.G_loss.gd1_lambda']), '\n']
+
+    exp_state_list.extend([
+                     'quaternion_mode: ', str(args.quaternion_mode), '\n',
+                     'quaternion_embedding: ', str(args.quaternion_embedding), '\n',
+                     'quaternion_use_translation: ',
+                     "yes" if args.quaternion_use_translation else "no", '\n',
+                     'pose_refine_rotation: ',
+                     "yes" if args.pose_refine_rotation else "no", '\n',
+                     'pose_refine_translation: ',
+                     "yes" if args.pose_refine_translation else "no", '\n',
+                     'pose_refine_max_angle_deg: ', str(args.pose_refine_max_angle_deg), '\n',
+                     'pose_refine_max_translation: ', str(args.pose_refine_max_translation), '\n',
+                     'pose_regularization_weight: ', str(args.pose_regularization_weight), '\n',
+                     'projection_loss_weight: ', str(args.projection_loss_weight), '\n',
+    ])
 
     exp_state_list.extend([
         'pretrained_decoder: ', str(args.pretrained_decoder), '\n',

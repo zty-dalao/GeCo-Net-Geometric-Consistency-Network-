@@ -304,13 +304,16 @@ class ResEncoder(nn.Module):
         self.latent_list = latent_list
         self.poses = poses
         
-    def queryfeature(self, xyz,):
+    def queryfeature(self, xyz, poses=None,):
         # key component of our method: feature back projection
         # xyz in world coords [N, 3]。N个3D 世界坐标点。
         N = xyz.shape[0]
-        xyz = torch.repeat_interleave(xyz.unsqueeze(0), self.num_view, dim=0)  # [nviews, N, 3]，广播：为每个视角复制所有点
+        if poses is None:
+            poses = self.poses
+        num_view = poses.shape[0]
+        xyz = torch.repeat_interleave(xyz.unsqueeze(0), num_view, dim=0)  # [nviews, N, 3]，广播：为每个视角复制所有点
         
-        vecs = torch.repeat_interleave(self.poses.unsqueeze(1), N, 1)  # [nviews, N, 12]，广播：为每个视角复制所有点
+        vecs = torch.repeat_interleave(poses.unsqueeze(1), N, 1)  # [nviews, N, 12]，广播：为每个视角复制所有点
         sources, detectors, uvectors, vvectors = vecs[..., :3], vecs[..., 3:6], vecs[..., 6:9], vecs[..., 9:]  # [nviews, N, 3] each，获取点，探测器，探测平面上的2个垂直的分量
 
         ray_dir = xyz - sources  # [nviews, N, 3]，# 从源指向点 xyz 的射线方向

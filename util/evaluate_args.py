@@ -66,6 +66,47 @@ def parse_args():
         "--fullres_multiscale_decoder", action="store_true",
         help="Build the full-grid F0-F4 concat-residual lift decoder",
     )
+    parser.add_argument(
+        "--quaternion_mode", choices=("none", "fusion", "calibration", "joint"),
+        default="none", help="Quaternion extension used by the checkpoint.",
+    )
+    parser.add_argument("--quaternion_use_translation", action="store_true")
+    parser.add_argument(
+        "--quaternion_embedding", choices=("absolute_q", "relative_q"),
+        default="relative_q",
+    )
+    parser.add_argument("--pose_refine_max_views", type=int, default=256)
+    parser.add_argument("--pose_refine_max_angle_deg", type=float, default=1.0)
+    parser.add_argument(
+        "--pose_delta_max_angle",
+        dest="pose_refine_max_angle_deg",
+        type=float,
+        default=1.0,
+        help="Alias of --pose_refine_max_angle_deg (degrees).",
+    )
+    parser.add_argument("--pose_refine_max_translation", type=float, default=1.0)
+    parser.add_argument(
+        "--pose_delta_max_translation",
+        dest="pose_refine_max_translation",
+        type=float,
+        default=1.0,
+        help="Alias of --pose_refine_max_translation (mm).",
+    )
+    parser.add_argument("--pose_regularization_weight", type=float, default=0.0)
+    parser.add_argument("--pose_refine_rotation", action="store_true", default=True)
+    parser.add_argument(
+        "--no_pose_refine_rotation",
+        dest="pose_refine_rotation",
+        action="store_false",
+        help="Freeze the rotation correction (must match training).",
+    )
+    parser.add_argument("--pose_refine_translation", action="store_true", default=True)
+    parser.add_argument(
+        "--no_pose_refine_translation",
+        dest="pose_refine_translation",
+        action="store_false",
+        help="Freeze the translation correction (must match training).",
+    )
     parser.add_argument("--multiscale_fusion", choices=("concat", "gated_add"), default="concat")
     parser.add_argument(
         "--multiscale_shallow", choices=("none", "2d_fuse", "2d_separate"), default="none",

@@ -69,6 +69,14 @@ if __name__ == '__main__':
         use_hierarchical_view_weights=args.use_hierarchical_view_weights,
         use_uncertainty_gate=args.use_uncertainty_gate,
         fullres_multiscale_decoder=args.fullres_multiscale_decoder,
+        quaternion_mode=args.quaternion_mode,
+        quaternion_embedding=args.quaternion_embedding,
+        quaternion_use_translation=args.quaternion_use_translation,
+        pose_refine_max_views=args.pose_refine_max_views,
+        pose_refine_max_angle_deg=args.pose_refine_max_angle_deg,
+        pose_refine_max_translation=args.pose_refine_max_translation,
+        pose_refine_rotation=args.pose_refine_rotation,
+        pose_refine_translation=args.pose_refine_translation,
     )
     if args.pretrained_backbone is not None and not args.resume:
         backbone_checkpoint = torch.load(args.pretrained_backbone, map_location="cpu")

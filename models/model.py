@@ -9,6 +9,7 @@ from submodel.adapter_with_transformer import TransformerLatentAdapter
 from submodel.continuous_prior_completion import ContinuousPriorCompletion
 from submodel.multiscale_lift import MultiScaleLiftDecoder
 from submodel.fullres_multiscale_lift import FullResolutionMultiScaleLiftDecoder
+from submodel.quaternion_geometry import QuaternionAwareAggregator, PoseRefiner
 
 # Main Model
 class model(nn.Module):
@@ -42,11 +43,23 @@ class model(nn.Module):
         use_hierarchical_view_weights=False,
         use_uncertainty_gate=False,
         fullres_multiscale_decoder=False,
+        quaternion_mode="none",
+        quaternion_embedding="relative_q",
+        quaternion_use_translation=False,
+        pose_refine_max_views=256,
+        pose_refine_max_angle_deg=1.0,
+        pose_refine_max_translation=1.0,
+        pose_refine_rotation=True,
+        pose_refine_translation=True,
     ):
         super(model, self).__init__()
         self.device = device
         self.query_chunk_size = int(query_chunk_size)
         self.use_query_checkpoint = bool(use_query_checkpoint)
+        self.quaternion_mode = str(quaternion_mode)
+        if self.quaternion_mode not in {"none", "fusion", "calibration", "joint"}:
+            raise ValueError("quaternion_mode must be none, fusion, calibration or joint")
+        self.quaternion_use_translation = bool(quaternion_use_translation)
         if self.query_chunk_size <= 0:
             raise ValueError("query_chunk_size must be positive")
         self.encoder_conf = model_conf['encoder']
@@ -59,6 +72,14 @@ class model(nn.Module):
         if self.use_multiscale_decoder and self.use_fullres_multiscale_decoder:
             raise ValueError(
                 "--multiscale_decoder and --fullres_multiscale_decoder are mutually exclusive"
+            )
+        if (
+            self.quaternion_mode in {"fusion", "joint"}
+            and self.use_multiscale_decoder
+        ):
+            raise ValueError(
+                "Quaternion-aware view fusion currently supports the original and "
+                "full-resolution lift paths, not --multiscale_decoder."
             )
         if self.use_fullres_multiscale_decoder:
             if use_adapter or use_prior_completion:
@@ -139,6 +160,8 @@ class model(nn.Module):
         self.last_aligned_latent = None
         self.last_completion_residual = None
         self.last_multiscale_aux = None
+        self.last_quaternion_aux = {}
+        self._current_poses = None
 
         self.aggregator_conf = model_conf['aggregator']
         if self.fusion == 'local':
@@ -149,18 +172,63 @@ class model(nn.Module):
             self.aggregator = varfusor(self.aggregator_conf).to(device)
         if self.fusion == 'ada':
             self.aggregator = adafusor(self.aggregator_conf).to(device)
+        if self.quaternion_mode in {"fusion", "joint"}:
+            if self.fusion not in {'local', 'meanmlp', 'varmlp', 'ada'}:
+                raise ValueError(
+                    "Quaternion-aware view fusion requires one of the learned "
+                    "aggregators: local, meanmlp, varmlp or ada."
+                )
+            self.quaternion_aggregator = QuaternionAwareAggregator(
+                self.aggregator,
+                embedding=str(quaternion_embedding),
+                use_translation=self.quaternion_use_translation,
+            ).to(device)
+        else:
+            self.quaternion_aggregator = None
+        if self.quaternion_mode in {"calibration", "joint"}:
+            self.pose_refiner = PoseRefiner(
+                max_views=int(pose_refine_max_views),
+                max_angle_deg=float(pose_refine_max_angle_deg),
+                max_translation=float(pose_refine_max_translation),
+                learn_rotation=bool(pose_refine_rotation),
+                learn_translation=bool(pose_refine_translation),
+            ).to(device)
+        else:
+            self.pose_refiner = None
 
         if self.last_layer.act == 'ReLU':
             self.last_layer_act = nn.ReLU(inplace=True)
         elif self.last_layer.act == 'GELU':
             self.last_layer_act = nn.GELU()
 
-    def _query_and_fuse_points(self, pnts):
-        latent = self.encoder.queryfeature(pnts)
-        return self._fuse_views(latent)
+    def _active_poses(self):
+        poses = self.encoder.poses
+        if self.pose_refiner is None:
+            return poses
+        corrected, regularizer, rotvec, translation = self.pose_refiner(poses)
+        self.last_quaternion_aux.update({
+            "pose_delta_regularizer": regularizer,
+            "pose_delta_angle_mean": torch.linalg.norm(rotvec, dim=-1).mean(),
+            "pose_delta_translation_mean": torch.linalg.norm(translation, dim=-1).mean(),
+        })
+        return corrected
 
-    def _fuse_views(self, latent):
-        """Apply the configured original multi-view Aggregator."""
+    def _query_and_fuse_points(self, pnts, poses):
+        latent = self.encoder.queryfeature(pnts, poses=poses)
+        return self._fuse_views(latent, poses=poses)
+
+    def _fuse_views(self, latent, poses=None):
+        """Apply the configured multi-view Aggregator."""
+        if self.quaternion_aggregator is not None:
+            if poses is None:
+                poses = (
+                    self._current_poses
+                    if self._current_poses is not None
+                    else self.encoder.poses
+                )
+            fused = self.quaternion_aggregator(latent, poses)
+            self.last_quaternion_aux.update(self.quaternion_aggregator.last_metrics)
+            return fused
         if self.fusion == 'max':
             return torch.max(latent, dim=0)[0]
         if self.fusion == 'mean':
@@ -170,6 +238,8 @@ class model(nn.Module):
     def query_volume_latent(self, xyz_world):
         x,y,z = xyz_world.shape[:3]                                 # 下采样后的尺寸 [x,y,z]=[X/4,Y/4,Z/4]
         points = xyz_world.contiguous().reshape(-1,3)               # 所有点坐标
+        poses = self._active_poses()
+        self._current_poses = poses
         pnts_split = torch.split(points, self.query_chunk_size)     # 分块控制融合阶段的瞬时显存
         h = []
         for pnts in pnts_split:
@@ -178,21 +248,24 @@ class model(nn.Module):
                 # instead of retaining their very large per-point activations.
                 fused = checkpoint(
                     self._query_and_fuse_points,
-                    pnts,
+                    pnts, poses,
                     use_reentrant=False,
                 )
             else:
-                fused = self._query_and_fuse_points(pnts)
+                fused = self._query_and_fuse_points(pnts, poses)
             h.append(fused)                                        # ② 聚合多视角特征 [C, npts]
             
         h = torch.cat(h,dim=1)
         return h.reshape(1,-1,x,y,z)                                # ③ 低分辨率特征体积 [1, C, X/4, Y/4, Z/4]
 
     def forward(self, xyz_world, return_latent=False, xyz_full_world=None):
+        self.last_quaternion_aux = {}
+        active_poses = self._active_poses()
+        self._current_poses = active_poses
         if self.use_fullres_multiscale_decoder:
             outputs, aux = self.decoder(
                 self.encoder.latent_list,
-                self.encoder.poses,
+                active_poses,
                 self.encoder.image_shape,
                 xyz_full=xyz_full_world,
                 view_fuser=self._fuse_views,
@@ -208,7 +281,7 @@ class model(nn.Module):
         if self.use_multiscale_decoder:
             outputs, aux = self.decoder(
                 self.encoder.latent_list,
-                self.encoder.poses,
+                active_poses,
                 self.encoder.image_shape,
                 xyz_full=xyz_full_world,
                 return_aux=True,

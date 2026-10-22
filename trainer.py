@@ -14,6 +14,7 @@ from models.loss import *
 from submodel.decoder.loss import bone_gt_mask_l1, soft_tissue_gt_mask_l1, ssim_loss_3d
 from submodel.decoder.model import PriorFeatureStem
 from submodel.deep_encoder.model import LearnedPriorEncoder
+from submodel.quaternion_geometry import METRIC_KEYS
 
 class trainer():
     def __init__(self, G_render, train_data_loader, val_data_loader, test_data_loader, visual_data_loader, args,
@@ -347,18 +348,21 @@ class trainer():
                 ("model.layer3.", "model.layer4.")
             ) else encoder_early_parameters
             destination.append(parameter)
-        aggregator = getattr(self.G_render, "aggregator", None)
-        aggregator_parameters = [] if aggregator is None else list(aggregator.parameters())
+        aggregator_parameters = []
+        for module in self._aggregator_modules():
+            aggregator_parameters.extend(module.parameters())
+        pose_refiner = getattr(self.G_render, "pose_refiner", None)
+        pose_parameters = [] if pose_refiner is None else list(pose_refiner.parameters())
         if self.multiscale_decoder:
             optimizer_groups = [
                 {"params": encoder_early_parameters, "lr": init_lr, "name": "encoder_early"},
                 {"params": encoder_late_parameters, "lr": init_lr, "name": "encoder_late"},
             ]
-            if self.fullres_multiscale_decoder and aggregator_parameters:
+            if aggregator_parameters:
                 optimizer_groups.append({
                     "params": aggregator_parameters,
                     "lr": init_lr,
-                    "name": "aggregator_fullres",
+                    "name": "aggregator_fullres" if self.fullres_multiscale_decoder else "aggregator_multiscale",
                 })
             optimizer_groups.append({
                 "params": list(self.G_render.decoder.parameters()),
@@ -369,6 +373,8 @@ class trainer():
                     else "decoder_multiscale"
                 ),
             })
+            if pose_parameters:
+                optimizer_groups.append({"params": pose_parameters, "lr": init_lr, "name": "pose_refiner"})
         else:
             decoder_core_parameters = list(itertools.chain(
                 self.G_render.decoder.in_blk.parameters(),
@@ -384,6 +390,7 @@ class trainer():
             {"params": encoder_early_parameters, "lr": init_lr, "name": "encoder_early"},
             {"params": encoder_late_parameters, "lr": init_lr, "name": "encoder_late"},
             {"params": aggregator_parameters, "lr": init_lr, "name": "aggregator"},
+            {"params": pose_parameters, "lr": init_lr, "name": "pose_refiner"},
             {"params": list(self.G_render.adapter.parameters()), "lr": init_lr, "name": "adapter"},
             {
                 "params": list(self.G_render.prior_completion.parameters()),
@@ -717,6 +724,15 @@ class trainer():
         for parameter in module.parameters():
             parameter.requires_grad = trainable
 
+    def _aggregator_modules(self):
+        """Return the base aggregator and, if enabled, the quaternion wrapper."""
+        modules = []
+        for name in ("aggregator", "quaternion_aggregator"):
+            module = getattr(self.G_render, name, None)
+            if module is not None:
+                modules.append(module)
+        return modules
+
     def _apply_training_stage(self, epoch):
         stage = self._training_stage(epoch)
         self.current_stage = stage
@@ -756,9 +772,10 @@ class trainer():
             self.G_render.use_adapter and self.adapter_lr_factor > 0,
         )
         self.G_render.encoder.eval()
-        aggregator = getattr(self.G_render, "aggregator", None)
-        if aggregator is not None:
-            aggregator.eval()
+        aggregators = self._aggregator_modules()
+        pose_refiner = getattr(self.G_render, "pose_refiner", None)
+        for module in aggregators:
+            module.eval()
         self.G_render.decoder.eval()
         self.G_render.adapter.train(
             self.G_render.use_adapter and self.adapter_lr_factor > 0
@@ -782,9 +799,12 @@ class trainer():
             for layer in (self.G_render.encoder.model.layer3, self.G_render.encoder.model.layer4):
                 self._set_trainable(layer, self.phase_b_encoder_lr_factor > 0)
                 layer.train(self.phase_b_encoder_lr_factor > 0)
-            if aggregator is not None:
-                self._set_trainable(aggregator, self.phase_b_aggregator_lr_factor > 0)
-                aggregator.train(self.phase_b_aggregator_lr_factor > 0)
+            for module in aggregators:
+                self._set_trainable(module, self.phase_b_aggregator_lr_factor > 0)
+                module.train(self.phase_b_aggregator_lr_factor > 0)
+            if pose_refiner is not None:
+                self._set_trainable(pose_refiner, self.phase_b_aggregator_lr_factor > 0)
+                pose_refiner.train(self.phase_b_aggregator_lr_factor > 0)
         elif stage == 1:
             self._set_trainable(
                 self.G_render.prior_completion,
@@ -799,11 +819,14 @@ class trainer():
                 self.G_render.encoder, self.phase_a_encoder_lr_factor > 0,
             )
             self.G_render.encoder.train(self.phase_a_encoder_lr_factor > 0)
-            if aggregator is not None:
+            for module in aggregators:
                 self._set_trainable(
-                    aggregator, self.phase_a_aggregator_lr_factor > 0,
+                    module, self.phase_a_aggregator_lr_factor > 0,
                 )
-                aggregator.train(self.phase_a_aggregator_lr_factor > 0)
+                module.train(self.phase_a_aggregator_lr_factor > 0)
+            if pose_refiner is not None:
+                self._set_trainable(pose_refiner, self.phase_a_aggregator_lr_factor > 0)
+                pose_refiner.train(self.phase_a_aggregator_lr_factor > 0)
         elif stage in (3, 4):
             self._set_trainable(
                 self.G_render.prior_completion, self.completion_lr_factor > 0,
@@ -819,9 +842,12 @@ class trainer():
             )
             self._set_trainable(self.G_render.encoder, backbone_factor > 0)
             self.G_render.encoder.train(backbone_factor > 0)
-            if aggregator is not None:
-                self._set_trainable(aggregator, aggregator_factor > 0)
-                aggregator.train(aggregator_factor > 0)
+            for module in aggregators:
+                self._set_trainable(module, aggregator_factor > 0)
+                module.train(aggregator_factor > 0)
+            if pose_refiner is not None:
+                self._set_trainable(pose_refiner, aggregator_factor > 0)
+                pose_refiner.train(aggregator_factor > 0)
 
             decoder_level = self._phase_c_decoder_level(epoch) if stage == 3 else 4
             decoder_modules = [self.G_render.decoder.out_blk]
@@ -857,9 +883,9 @@ class trainer():
                 )
                 self._set_trainable(self.G_render.encoder, backbone_factor > 0)
                 self.G_render.encoder.train(backbone_factor > 0)
-                if aggregator is not None:
-                    self._set_trainable(aggregator, backbone_factor > 0)
-                    aggregator.train(backbone_factor > 0)
+                for module in aggregators:
+                    self._set_trainable(module, backbone_factor > 0)
+                    module.train(backbone_factor > 0)
 
                 decoder_modules = [
                     self.G_render.decoder.out_blk,
@@ -897,6 +923,13 @@ class trainer():
         mean = latent.mean(dim=(2, 3, 4), keepdim=True)
         std = latent.std(dim=(2, 3, 4), keepdim=True, unbiased=False)
         return (latent - mean) / (std + 1e-6)
+
+    def _projection_loss_weight(self):
+        """2-D forward-projection weight; the B4 term needs a PoseRefiner."""
+        weight = float(self.mse_lambda_2d)
+        if getattr(self.G_render, "pose_refiner", None) is not None:
+            weight += float(getattr(self.args, "projection_loss_weight", 0.0))
+        return weight
 
     def _latent_terms(self, projection_latent, prior_latent):
         raw = F.smooth_l1_loss(projection_latent, prior_latent)
@@ -1299,7 +1332,29 @@ class trainer():
                                 stacklevel=2,
                             )
                 else:
-                    self.G_render.load_state_dict(data['G_render'])
+                    incompatible = self.G_render.load_state_dict(
+                        data['G_render'], strict=False
+                    )
+                    # Resuming a pre-quaternion checkpoint into fusion/calibration
+                    # is supported: the new modules keep their zero-initialized
+                    # weights, which reproduce the baseline behaviour exactly.
+                    allowed_missing = ("quaternion_aggregator.", "pose_refiner.")
+                    invalid_missing = [
+                        key for key in incompatible.missing_keys
+                        if not key.startswith(allowed_missing)
+                    ]
+                    if invalid_missing or incompatible.unexpected_keys:
+                        raise RuntimeError(
+                            "Checkpoint/model mismatch. Missing keys: "
+                            f"{invalid_missing}; unexpected keys: "
+                            f"{incompatible.unexpected_keys}"
+                        )
+                    if incompatible.missing_keys:
+                        warnings.warn(
+                            "The resumed checkpoint predates the quaternion module; "
+                            "its weights keep the zero-initialized defaults.",
+                            stacklevel=2,
+                        )
             if 'iter' in data: self.begin_epochs = data['iter']
             if 'global_step' in data: self.global_step = data['global_step']
             if 'prior_stem' in data and self.prior_stem is not None:
@@ -1309,7 +1364,7 @@ class trainer():
                 try:
                     self.G_optim.load_state_dict(data['G_optim'])
                     optimizer_restored = True
-                except ValueError:
+                except (ValueError, RuntimeError):
                     warnings.warn(
                         "The checkpoint optimizer does not match the four-phase parameter groups; "
                         "model weights were restored but optimizer state was restarted.",
@@ -1362,11 +1417,23 @@ class trainer():
                 return_latent=True,
             )
 
+        quaternion_aux = getattr(self.G_render, "last_quaternion_aux", {}) or {}
+        pose_regularizer = quaternion_aux.get(
+            "pose_delta_regularizer", volume_predict.new_zeros(())
+        )
+
         self.G_optim.zero_grad()
         # 3d loss，体素空间级别的L1 loss
         mse_loss_3d = self.mse_loss(volume_predict, volume_gt) * self.mse_lambda_3d
         loss_dict['mse_loss_3d'] = round(mse_loss_3d.item(), 8)
         G_loss = mse_loss_3d
+        pose_reg_weight = float(getattr(self.args, "pose_regularization_weight", 0.0))
+        pose_reg_loss = pose_regularizer * pose_reg_weight
+        G_loss += pose_reg_loss
+        for key in METRIC_KEYS:
+            value = quaternion_aux.get(key, volume_predict.new_zeros(()))
+            loss_dict[key] = round(float(value.detach().item()), 8)
+        loss_dict["pose_regularization_loss"] = round(pose_reg_loss.detach().item(), 8)
 
         multiscale_aux, multiscale_aux_values = self._multiscale_auxiliary_loss(
             volume_predict, volume_gt,
@@ -1404,7 +1471,8 @@ class trainer():
         )
 
         # 2d ray batch loss
-        if self.mse_lambda_2d > 0:
+        projection_weight = self._projection_loss_weight()
+        if projection_weight > 0:
             pix_inds = torch.randint(
                 0,
                 src_images.shape[0] * H * W,
@@ -1413,14 +1481,15 @@ class trainer():
             )
             images_gt_all = src_images.reshape(-1, 1)
             proj_gt = images_gt_all[pix_inds]
-            src_rays = get_rays(src_poses, H, W)
+            projection_poses = getattr(self.G_render, "_current_poses", src_poses)
+            src_rays = get_rays(projection_poses, H, W)
             proj_rays = src_rays.view(-1, src_rays.shape[-1])[pix_inds].to(device=device)
             proj_predict = composite(rays=proj_rays, volume=volume_predict.float(), volume_origin=volume_origin,
                                         volume_phy=volume_phy, render_step_size=render_step_size, 
                                         chunksize=self.chunksize).reshape(proj_gt.shape)
             if self.expnorm:
                 proj_predict = torch.exp(-proj_predict/self.divide)
-            mse_loss_2d = self.mse_loss(proj_predict, proj_gt) * self.mse_lambda_2d
+            mse_loss_2d = self.mse_loss(proj_predict, proj_gt) * projection_weight
             loss_dict['mse_loss_2d'] = round(mse_loss_2d.item(), 8)
             G_loss += mse_loss_2d
         else:
@@ -1452,6 +1521,10 @@ class trainer():
             'cross_scale_loss', 'view_weight_delta_loss',
             'uncertainty_e2_mean', 'uncertainty_e3_mean',
             'uncertainty_e4_mean', 'uncertainty_e01_mean',
+             'pose_delta_regularizer', 'pose_delta_angle_mean',
+             'pose_delta_translation_mean', 'pose_regularization_loss',
+             'relative_pose_angle_deg_mean', 'view_weight_entropy_norm',
+             'view_weight_max_mean',
         ):
             if key in loss_dict:
                 self.writer.add_scalar(
@@ -1544,10 +1617,17 @@ class trainer():
                 device=device,
                 return_latent=True,
             )
-        
         # metrics calculation
         volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
         loss_dict = {'obj_index': obj_index}
+        quaternion_aux = getattr(self.G_render, "last_quaternion_aux", {}) or {}
+        for key in METRIC_KEYS:
+            value = quaternion_aux.get(key, volume_predict.new_zeros(()))
+            loss_dict[key] = round(float(value.detach().item()), 8)
+        loss_dict["pose_regularization_loss"] = round(
+            float(quaternion_aux.get("pose_delta_regularizer", volume_predict.new_zeros(())).detach().item())
+            * float(getattr(self.args, "pose_regularization_weight", 0.0)), 8,
+        )
         loss_3d = self.mse_loss(volume_predict, volume_gt) * self.mse_lambda_3d
         loss_dict['mse_loss_3d'] = round(loss_3d.item(), 8)
         total_loss = loss_3d
@@ -1590,7 +1670,7 @@ class trainer():
             + optional_losses['ssim_loss']
         )
 
-        if self.mse_lambda_2d > 0:
+        if self._projection_loss_weight() > 0:
             total_pixels = src_images.shape[0] * H * W
             sample_count = min(self.ray_batch_size, total_pixels)
             pix_inds = torch.linspace(
@@ -1600,7 +1680,8 @@ class trainer():
                 device=src_images.device,
             ).long()
             proj_gt = src_images.reshape(-1, 1)[pix_inds]
-            src_rays = get_rays(src_poses, H, W)
+            projection_poses = getattr(self.G_render, "_current_poses", src_poses)
+            src_rays = get_rays(projection_poses, H, W)
             proj_rays = src_rays.reshape(-1, src_rays.shape[-1])[pix_inds]
             proj_predict = composite(
                 rays=proj_rays,
@@ -1612,7 +1693,7 @@ class trainer():
             ).reshape(proj_gt.shape)
             if self.expnorm:
                 proj_predict = torch.exp(-proj_predict / self.divide)
-            loss_2d = self.mse_loss(proj_predict, proj_gt) * self.mse_lambda_2d
+            loss_2d = self.mse_loss(proj_predict, proj_gt) * self._projection_loss_weight()
             total_loss += loss_2d
             loss_dict['mse_loss_2d'] = round(loss_2d.item(), 8)
         else:
@@ -1692,6 +1773,13 @@ class trainer():
             'soft_mask_loss',
             'ssim_loss_raw',
             'ssim_loss',
+            'pose_delta_regularizer',
+            'pose_delta_angle_mean',
+            'pose_delta_translation_mean',
+            'pose_regularization_loss',
+            'relative_pose_angle_deg_mean',
+            'view_weight_entropy_norm',
+            'view_weight_max_mean',
         )
 
     def _write_epoch_tensorboard(self, split, sums, count, epoch, metrics=None):

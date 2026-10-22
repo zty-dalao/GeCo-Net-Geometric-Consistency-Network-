@@ -8,6 +8,7 @@ import torch.utils.data
 from models.render import *
 from util.util_func import *
 from submodel.decoder.loss import bone_gt_mask_l1, soft_tissue_gt_mask_l1, ssim_loss_3d
+from submodel.quaternion_geometry import METRIC_KEYS
 
 def test_step():
     # data loading
@@ -53,10 +54,17 @@ def test_step():
     # calculate metrics with clamped volume for more accurate evaluation
     loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
     loss_dict['ssim_3d_clamp'] = round(get_ssim_3d(data_norm(volume_predict_clamp), data_norm(volume_gt), data_range=1), 8)
+    zero = volume_predict.new_zeros(())
+    quaternion_aux = getattr(G_render, "last_quaternion_aux", {}) or {}
+    for key in METRIC_KEYS:
+        value = quaternion_aux.get(key, zero)
+        loss_dict[key] = round(float(value.detach().item()), 8)
+    loss_dict["pose_regularization_loss"] = round(
+        loss_dict["pose_delta_regularizer"] * float(getattr(args, "pose_regularization_weight", 0.0)), 8,
+    )
     # These use the exact same GT-defined mask implementations as standalone
     # Decoder pretraining.  They are optional reports, not metrics used for
     # checkpoint loading or image generation.
-    zero = volume_predict.new_zeros(())
     bone_raw = zero
     soft_raw = zero
     ssim_raw = zero
@@ -136,6 +144,14 @@ if __name__ == '__main__':
         use_hierarchical_view_weights=args.use_hierarchical_view_weights,
         use_uncertainty_gate=args.use_uncertainty_gate,
         fullres_multiscale_decoder=args.fullres_multiscale_decoder,
+        quaternion_mode=args.quaternion_mode,
+        quaternion_embedding=args.quaternion_embedding,
+        quaternion_use_translation=args.quaternion_use_translation,
+        pose_refine_max_views=args.pose_refine_max_views,
+        pose_refine_max_angle_deg=args.pose_refine_max_angle_deg,
+        pose_refine_max_translation=args.pose_refine_max_translation,
+        pose_refine_rotation=args.pose_refine_rotation,
+        pose_refine_translation=args.pose_refine_translation,
     )
     if args.resume_name is not None:
         model_path = os.path.join(checkpoints_path, 'ckpt_history', 'ckpt_'+args.resume_name)

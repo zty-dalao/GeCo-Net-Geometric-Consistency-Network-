@@ -69,6 +69,101 @@ q_v   = Quat(R_v)
 Translation stays in the original 12-vector; a quaternion alone cannot encode
 source/detector positions, SID/SAD, pixel spacing or half-fan offsets.
 
+## Motivation and pipeline
+
+### Stage A – which view should be trusted
+
+Sparse-view CBCT gives only `V` projections (20 in the commands below), so the
+volume is strongly under-determined and views are far from equally informative.
+The base aggregator (`adafusor` and friends) derives the per-view weights from
+the features alone:
+
+```text
+logits_v = weight_fc([f_v, mean_v f, var_v f]),   w = softmax_v(logits)
+```
+
+Nothing in that rule knows how the views relate in space. Stage A injects that
+relation: the relative quaternion against the reference view (index 0) is mapped
+by a small MLP into an additive bias on the weight logits, so fusion can favour
+geometrically close views while still using complementary ones:
+
+```text
+w_v = softmax_v(base_logits_v + MLP(q_rel,v)),   F = sum_v w_v * f_v
+q_rel,v = q_ref^-1 (x) q_v,   q_v = Quat([u_hat, v_hat, u_hat x v_hat])
+```
+
+A1 uses the absolute `q_v`, A2 the relative `q_rel` (preferred, because absolute
+poses are tied to the patient/table frame while only relative poses describe the
+view relationship), A3 appends the relative source translation. The bias
+projection is zero-initialized, so training starts from exactly the baseline
+aggregator output. Nothing else changes: features, geometry, encoder and decoder
+are untouched.
+
+### Stage B – the nominal geometry is not exact
+
+Feature back-projection is: 3-D point -> ray/plane intersection with that view's
+`[source, detector, u, v]` -> detector pixel -> bilinear sample
+([ResEncoder.py](../../models/ResEncoder.py)). C-arm and DRR geometry carry a
+residual calibration error of roughly 1 degree and 1 mm, and such an error
+shifts every sample at once, so the network reads features from the wrong
+tissue and the reconstructed volume blurs or shows ghosting.
+
+Stage B learns a small, bounded correction per view:
+
+```text
+rotvec_v = max_angle * tanh(a_v)    # axis-angle, bound e.g. 0.5 deg
+dt_v     = max_trans * tanh(b_v)    # mm, bound e.g. 1.0
+pose'_v  = apply_pose_delta(pose_v, rotvec_v, dt_v)
+```
+
+regularized by `lambda_q |rotvec|^2 + lambda_t |dt|^2` and zero-initialized, so
+training starts at the nominal geometry. The corrected pose is then used twice —
+for feature sampling and for the forward-projection loss — which is why stage B
+moves the result more than stage A. In one sentence: A edits the fusion weights,
+B edits the geometry, and C is A applied on the corrected geometry.
+
+### Pipeline
+
+```text
+input: V projections [V,1,H,W] + 12-D pose per view [V,12]
+       pose = [source(3), detector(3), u(3), v(3)]
+
+(1) 2-D encode (ResEncoder.forward)
+    every view -> F0..F4, concatenated to 256 channels -> latent_list,
+    poses cached alongside
+
+(2) [B] pose correction (_active_poses -> PoseRefiner)
+    pose -> (Delta q, Delta t) -> apply_pose_delta -> pose'
+    pose_delta_* metrics recorded; pose' stored in _current_poses
+
+(3) feature back-projection (ResEncoder.queryfeature, uses pose')
+    low-resolution grid points xyz [N,3] (scale=4)
+    per view: ray/plane intersection -> pixel (u,v) -> grid_sample
+    -> per-view features [V, 256, N]
+
+(4) [A] view fusion (_fuse_views -> QuaternionAwareAggregator -> adafusor)
+    q_v from the detector basis; q_rel = q_ref^-1 (x) q_v (A3 also t_rel)
+    w_v = softmax_v(base_logits + MLP(q_rel)),  F = sum_v w_v * f_v -> [256, N]
+
+(5) fused low-resolution latent volume [1, 256, X/4, Y/4, Z/4]
+
+(6) 3-D decoder -> volume_predict
+
+(7) losses (trainer.py)
+    mse_loss_3d    volume vs GT volume (main supervision)
+    gd1_loss       volume gradient loss
+    latent / prior / completion / ssim / mask   optional auxiliaries
+    mse_loss_2d    rays cast with pose' are composited into 2-D projections and
+                   compared with the measured ones
+                   (weight = mse_lambda_2d + projection_loss_weight, stage B4)
+    pose_regularization_loss   only in calibration/joint
+```
+
+In short: 2-D features -> use the geometry to fetch features at every 3-D point
+from every view -> fuse the views with quaternion-biased weights -> decode a
+volume -> project back to 2-D to check the geometry. A acts only in step (4);
+B rewrites the geometry in step (2) and therefore influences both (3) and (7).
+
 ## Ablation ladder
 
 Every row states what it **adds** to the row above it inside the same stage.
@@ -277,6 +372,51 @@ is a valid control with the same module and parameter count as B1–B4.
 Calibration training should be validated on controlled geometric perturbations
 of otherwise identical data; clean-data PSNR alone does not show whether a
 correction is meaningful.
+
+## Learning-rate schedule
+
+The LR is **not** constant. Every command above inherits `conf/train.conf`:
+
+```text
+lr_sche { init_lr = 0.0001, step_size = 50, gamma = 0.5 }
+```
+
+and the trainer recomputes every parameter group at each epoch as
+
+```text
+lr = init_lr * gamma ** (epoch // step_size)
+```
+
+so it halves every 50 epochs:
+
+| epochs | effective LR |
+|---|---|
+| 0-49 | 1e-4 |
+| 50-99 | 5e-5 |
+| 100-149 | 2.5e-5 |
+| 150-199 | 1.25e-5 |
+| 200-249 | 6.25e-6 |
+| 250-299 | 3.125e-6 |
+
+The current value is logged as `G_lr` in `train/logs/<name>/train_ls.txt`.
+Overrides: `--init-lr`, `--lr-step-size`, `--lr-gamma`, and
+`--lr-decay-restart` (count the decay from the resumed epoch instead of epoch 0).
+
+To train with a **constant** learning rate, either pass `--lr-gamma 1` (since
+`gamma ** n == 1`) or the explicit convenience flag `--no_lr_decay`, which sets
+the same thing without having to think about the schedule. The two cannot be
+combined with a `--lr-gamma` below 1. This decay is pre-existing behaviour of
+the main model (`conf/train.conf`), not something introduced by the quaternion
+extension.
+
+For commands like A3 above, `--phase_a_encoder_lr_factor 1` and
+`--phase_a_aggregator_lr_factor 1` are inert: the four-phase schedule only turns
+on with `--pretrained_decoder` plus `--use_adapter` or `--use_prior_completion`.
+Without it `_training_stage` returns 0 and every group — encoder early/late,
+aggregator (which also holds the quaternion MLP) and the decoder — shares the
+same decayed LR; pass `--stage0_decoder_lr_factor` (e.g. `0` or `0.1`) if the
+decoder must be frozen or slower. The `pose_refiner` group only exists in
+`calibration`/`joint`.
 
 ## Evaluation
 

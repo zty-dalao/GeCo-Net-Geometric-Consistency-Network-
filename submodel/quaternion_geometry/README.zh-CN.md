@@ -64,6 +64,88 @@ q_v   = Quat(R_v)
 平移仍然保留在原来的 12 维向量中；仅靠四元数无法编码源/探测器位置、SID/SAD、像素间距
 或半扇偏移。
 
+## 动机与流程
+
+### 阶段 A 解决什么：该信哪个视角
+
+稀疏视角 CBCT 只有 `V` 张投影（下面命令里是 20 张），重建严重欠定，不同视角的信息量
+也远非等价。基础聚合器完全由“特征长什么样”决定逐视角权重：
+
+```text
+logits_v = weight_fc([f_v, mean_v f, var_v f]),   w = softmax_v(logits)
+```
+
+这条规则里没有任何“视角之间在空间中是什么关系”的信息。阶段 A 就把这个关系注入进去：
+每个视角相对参考视角（默认 view 0）的四元数经小 MLP 变成权重 logits 的加性偏置，于是
+融合可以偏向几何上更接近的视角，同时仍保留互补的远视角：
+
+```text
+w_v = softmax_v(base_logits_v + MLP(q_rel,v)),   F = sum_v w_v * f_v
+q_rel,v = q_ref^-1 (x) q_v,   q_v = Quat([u_hat, v_hat, u_hat x v_hat])
+```
+
+A1 用绝对 `q_v`；A2 换成相对 `q_rel`（更合理：绝对姿态绑定了患者/床坐标系，只有相对
+姿态才表达“视角关系”）；A3 再附加相对源平移。偏置投影零初始化，所以训练一开始与
+baseline 聚合器的输出完全一致。其余一切不变：特征、几何、编码器、解码器都不动。
+
+### 阶段 B 解决什么：标称几何本身不准
+
+特征反投影的流程是：3D 点 → 与 `[source, detector, u, v]` 做射线/平面求交 → 探测器像素
+→ 双线性采样（[ResEncoder.py](../../models/ResEncoder.py)）。C 臂与 DRR 的几何带有约
+1°、1 mm 量级的残余标定误差，这种误差会让所有采样点整体错位，网络便从错误的组织上取
+特征，重建结果发糊、出现重影。
+
+阶段 B 学习一个小的、有界的逐视角修正：
+
+```text
+rotvec_v = max_angle * tanh(a_v)    # 轴角，上界如 0.5 度
+dt_v     = max_trans * tanh(b_v)    # mm，上界如 1.0
+pose'_v  = apply_pose_delta(pose_v, rotvec_v, dt_v)
+```
+
+并用 `lambda_q |rotvec|^2 + lambda_t |dt|^2` 正则、零初始化，使训练从标称几何出发。
+修正后的 pose 会被用两次——特征采样与前向投影损失——这就是 B 对结果影响大于 A 的原因。
+一句话：A 改的是融合权重，B 改的是几何，C 是在修正后几何上再做 A。
+
+### 整体流程
+
+```text
+输入: V 张投影 [V,1,H,W] + 每视角 12 维 pose [V,12]
+      pose = [source(3), detector(3), u(3), v(3)]
+
+(1) 2D 编码 (ResEncoder.forward)
+    每个视角 -> F0..F4，按通道拼成 256 维 -> latent_list，同时缓存 poses
+
+(2) [B] 位姿修正 (_active_poses -> PoseRefiner)
+    pose -> (Delta q, Delta t) -> apply_pose_delta -> pose'
+    记录 pose_delta_* 指标，并把 pose' 存入 _current_poses
+
+(3) 特征反投影采样 (ResEncoder.queryfeature，使用 pose')
+    低分辨率体素网格点 xyz [N,3]（scale=4 下采样）
+    逐视角：射线/探测器平面求交 -> 像素 (u,v) -> grid_sample
+    -> 逐视角特征 [V, 256, N]
+
+(4) [A] 视角融合 (_fuse_views -> QuaternionAwareAggregator -> adafusor)
+    由探测器基向量得到 q_v；q_rel = q_ref^-1 (x) q_v（A3 再加 t_rel）
+    w_v = softmax_v(base_logits + MLP(q_rel)),  F = sum_v w_v * f_v -> [256, N]
+
+(5) 低分辨率隐式特征体 [1, 256, X/4, Y/4, Z/4]
+
+(6) 3D 解码器 -> volume_predict
+
+(7) 损失 (trainer.py)
+    mse_loss_3d    体数据 vs GT 体积（主监督）
+    gd1_loss       体数据梯度损失
+    latent / prior / completion / ssim / mask   可选辅助项
+    mse_loss_2d    沿 pose' 的射线在体数据上积分成 2D 投影，与输入投影比较
+                   （权重 = mse_lambda_2d + projection_loss_weight，阶段 B4）
+    pose_regularization_loss   仅 calibration/joint
+```
+
+一句话理解：2D 特征 → 用几何把每个 3D 点投回各视角取特征 → 用四元数偏置的权重融合
+→ 解码成体数据 → 再投回 2D 检验几何。A 只作用于第 (4) 步；B 在第 (2) 步改写几何，
+因此同时影响 (3) 和 (7)。
+
 ## 消融阶梯（A0–A3 / B0–B4 / C）
 
 每一行都写明它相对“同一阶段内上一行”**增加了什么**。建议按 `A0 -> A2 -> B3 -> C`
@@ -265,6 +347,48 @@ python train.py --name dental_c_joint --datadir ./dataset/dental/syn_data \
 
 校准训练应在“除几何扰动外其余完全相同”的受控数据上进行验证；仅凭干净数据上的 PSNR
 无法说明该修正是否有意义。
+
+## 学习率调度
+
+学习率**不是**恒定值。上面所有命令都会继承 `conf/train.conf`：
+
+```text
+lr_sche { init_lr = 0.0001, step_size = 50, gamma = 0.5 }
+```
+
+trainer 每个 epoch 按下面的公式重算所有参数组的 LR：
+
+```text
+lr = init_lr * gamma ** (epoch // step_size)
+```
+
+也就是每 50 个 epoch 减半：
+
+| epoch 区间 | 实际学习率 |
+|---|---|
+| 0-49 | 1e-4 |
+| 50-99 | 5e-5 |
+| 100-149 | 2.5e-5 |
+| 150-199 | 1.25e-5 |
+| 200-249 | 6.25e-6 |
+| 250-299 | 3.125e-6 |
+
+当前值会以 `G_lr` 记录在 `train/logs/<name>/train_ls.txt` 中。可覆盖参数：
+`--init-lr`、`--lr-step-size`、`--lr-gamma`，以及 `--lr-decay-restart`
+（让衰减从 resume 的 epoch 重新起算，而不是从 epoch 0 继续）。
+
+若想使用**恒定学习率**：要么传 `--lr-gamma 1`（因为 `gamma ** n == 1`），要么用显式
+便捷开关 `--no_lr_decay`（等价于前者，不必关心调度细节）。两者不可与小于 1 的
+`--lr-gamma` 同时使用。这个衰减是主模型（`conf/train.conf`）原有的行为，并不是四元数
+扩展引入的。
+
+对上面 A3 这类命令，`--phase_a_encoder_lr_factor 1` 与
+`--phase_a_aggregator_lr_factor 1` 实际不起作用：四阶段调度只有在同时给了
+`--pretrained_decoder` 与 `--use_adapter`（或 `--use_prior_completion`）时才开启。
+否则 `_training_stage` 恒返回 0，所有参数组——encoder early/late、aggregator
+（四元数 MLP 也在这一组）以及 decoder——共享同一个衰减后的 LR；若希望 decoder
+更慢或冻结，请传 `--stage0_decoder_lr_factor`（如 `0` 或 `0.1`）。`pose_refiner`
+参数组只在 `calibration`/`joint` 模式下存在。
 
 ## 评估
 

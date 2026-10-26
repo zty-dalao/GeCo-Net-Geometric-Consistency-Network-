@@ -46,6 +46,17 @@ def parse_args():
         help="Override conf/train.conf lr_sche.gamma (LR decay factor).",
     )
     parser.add_argument(
+        "--no_lr_decay",
+        "--no-lr-decay",
+        dest="no_lr_decay",
+        action="store_true",
+        help=(
+            "Keep the learning rate constant for the whole run; equivalent to "
+            "--lr-gamma 1 without having to know the schedule. Cannot be combined "
+            "with a --lr-gamma below 1."
+        ),
+    )
+    parser.add_argument(
         "--lr-decay-restart",
         action="store_true",
         help=(
@@ -539,6 +550,10 @@ def parse_args():
             "--projection_loss_weight (stage B4) requires --quaternion_mode "
             "calibration or joint so the corrected geometry is used"
         )
+    if args.no_lr_decay:
+        if args.lr_gamma is not None and args.lr_gamma < 1:
+            parser.error("--no_lr_decay conflicts with --lr-gamma < 1")
+        args.lr_gamma = 1.0
     if min(
         args.completion_lr_factor,
         args.completion_residual_lambda,

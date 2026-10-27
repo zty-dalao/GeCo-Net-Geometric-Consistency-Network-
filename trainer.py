@@ -30,29 +30,6 @@ class trainer():
         self.test_data_loader = test_data_loader
         self.visual_data_loader = visual_data_loader
 
-    def _quality_metrics(self, volume_predict, volume_gt):
-        """Compute split metrics, delegating quaternion runs to its module."""
-        metric_fn = getattr(self.G_render, "quaternion_metric_fn", None)
-        if metric_fn is not None:
-            return metric_fn(
-                volume_predict, volume_gt, self.clamp_min, self.clamp_max,
-            )
-        volume_predict_clamp = torch.clamp(
-            volume_predict, self.clamp_min, self.clamp_max,
-        )
-        return {
-            "psnr_3d_clamp": float(
-                get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt))
-            ),
-            "ssim_3d_clamp": float(
-                get_ssim_3d(
-                    data_norm(volume_predict_clamp),
-                    data_norm(volume_gt),
-                    data_range=1,
-                )
-            ),
-        }
-
         # interval
         self.vis_interval = conf.get_int('train.print.vis_interval')    # 每隔多少 epoch 做一次可视化
         self.save_interval = conf.get_int('train.print.save_interval')  # 每隔多少 epoch 存一次历史 checkpoint
@@ -480,6 +457,29 @@ class trainer():
             # base LR instead of continuing from 0.5**(epoch//step_size).
             self.lr_decay_origin = self.begin_epochs
         self._apply_training_stage(self.begin_epochs)
+
+    def _quality_metrics(self, volume_predict, volume_gt):
+        """Compute split metrics, delegating quaternion runs to its module."""
+        metric_fn = getattr(self.G_render, "quaternion_metric_fn", None)
+        if metric_fn is not None:
+            return metric_fn(
+                volume_predict, volume_gt, self.clamp_min, self.clamp_max,
+            )
+        volume_predict_clamp = torch.clamp(
+            volume_predict, self.clamp_min, self.clamp_max,
+        )
+        return {
+            "psnr_3d_clamp": float(
+                get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt))
+            ),
+            "ssim_3d_clamp": float(
+                get_ssim_3d(
+                    data_norm(volume_predict_clamp),
+                    data_norm(volume_gt),
+                    data_range=1,
+                )
+            ),
+        }
 
     def _schedule_epoch(self, epoch):
         """Map an absolute epoch onto the A/B/C/D schedule timeline.

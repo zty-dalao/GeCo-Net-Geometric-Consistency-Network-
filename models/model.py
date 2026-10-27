@@ -9,7 +9,11 @@ from submodel.adapter_with_transformer import TransformerLatentAdapter
 from submodel.continuous_prior_completion import ContinuousPriorCompletion
 from submodel.multiscale_lift import MultiScaleLiftDecoder
 from submodel.fullres_multiscale_lift import FullResolutionMultiScaleLiftDecoder
-from submodel.quaternion_geometry import QuaternionAwareAggregator, PoseRefiner
+from submodel.quaternion_geometry import (
+    QuaternionAwareAggregator,
+    PoseRefiner,
+    quaternion_reconstruction_metrics,
+)
 
 # Main Model
 class model(nn.Module):
@@ -60,6 +64,12 @@ class model(nn.Module):
         if self.quaternion_mode not in {"none", "fusion", "calibration", "joint"}:
             raise ValueError("quaternion_mode must be none, fusion, calibration or joint")
         self.quaternion_use_translation = bool(quaternion_use_translation)
+        # The trainer uses this hook for train/val/test quality metrics.  Keep
+        # the legacy inline path untouched when quaternion geometry is disabled.
+        self.quaternion_metric_fn = (
+            quaternion_reconstruction_metrics
+            if self.quaternion_mode != "none" else None
+        )
         if self.query_chunk_size <= 0:
             raise ValueError("query_chunk_size must be positive")
         self.encoder_conf = model_conf['encoder']

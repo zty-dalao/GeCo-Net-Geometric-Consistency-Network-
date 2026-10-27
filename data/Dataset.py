@@ -21,6 +21,11 @@ class CBCTDataset(torch.utils.data.Dataset):
         self.args = args
         self.stage = stage
         self.angle_sampling = args.angle_sampling
+        # Only used by ``random_existing``.  ``random`` means a random
+        # non-uniform subset; ``uniform`` means an equally spaced subset with
+        # a random phase, so it changes between calls while preserving the
+        # angular spacing.
+        self.existing_view_pattern = getattr(args, "existing_view_pattern", "random")
         self.device = args.device
         self.datadir = args.datadir
         dataset_split_json = os.path.join('./data/dataset_split', args.datatype+'_split.json')
@@ -67,6 +72,69 @@ class CBCTDataset(torch.utils.data.Dataset):
                 vec = torch.tensor(frame['vec'], dtype=torch.float32, device=self.device)
                 vecs.append(vec)
             vecs = torch.stack(vecs)
+
+        elif self.angle_sampling == "random_existing":
+            # Select from projections that are already stored on disk.  This
+            # branch deliberately does not render a new DRR from the GT
+            # volume, so the selected image and geometry always share the
+            # same frame index.  It is suitable for measured projections as
+            # well as pre-generated synthetic projections.
+            img_path = os.path.join(self.datadir, self.dataset_split[index], 'proj.nii.gz')
+            proj = sitk.GetArrayFromImage(sitk.ReadImage(img_path))
+            proj = np.clip(proj, 0, proj.max())
+            frame_count = min(len(proj), len(paras.get('frames', [])))
+            if frame_count <= 0:
+                raise ValueError(
+                    f"{self.dataset_split[index]} has no stored projections/frames"
+                )
+            angle_per_view = float(paras.get('angle_per_view', (end - start) / frame_count))
+            if angle_per_view <= 0:
+                raise ValueError("angle_per_view must be positive for random_existing")
+            start_index = max(0, int(np.ceil(start / angle_per_view)))
+            end_index = min(
+                frame_count,
+                int(np.ceil(end / angle_per_view)),
+            )
+            candidates = np.arange(start_index, end_index, dtype=np.int64)
+            if len(candidates) < nviews:
+                raise ValueError(
+                    f"random_existing requests {nviews} views but only "
+                    f"{len(candidates)} stored frames fall in [{start}, {end})"
+                )
+
+            if self.existing_view_pattern == "uniform":
+                # Preserve equal spacing but randomize the phase.  For the
+                # usual 360/20, 360/10 and 360/5 settings this samples one of
+                # 18, 36 and 72 possible phase offsets respectively.
+                spacing = len(candidates) / float(nviews)
+                phase = np.random.uniform(0.0, spacing)
+                positions = np.floor(phase + np.arange(nviews) * spacing).astype(np.int64)
+                positions = np.clip(positions, 0, len(candidates) - 1)
+                if len(np.unique(positions)) != nviews:
+                    positions = np.linspace(
+                        0, len(candidates), nviews, endpoint=False, dtype=np.int64
+                    )
+                indices = candidates[positions]
+            elif self.existing_view_pattern == "random":
+                indices = np.sort(
+                    np.random.choice(candidates, size=nviews, replace=False)
+                )
+            else:
+                raise ValueError(
+                    "existing_view_pattern must be 'uniform' or 'random'"
+                )
+
+            all_imgs = torch.tensor(
+                proj[indices], dtype=torch.float32, device=self.device
+            ).unsqueeze(1)
+            vecs = torch.stack([
+                torch.tensor(
+                    paras['frames'][int(i)]['vec'],
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                for i in indices
+            ])
 
         elif self.angle_sampling == "random":  
             # we only recommend random sampling during evaluation because X-ray simulation is really slow, 

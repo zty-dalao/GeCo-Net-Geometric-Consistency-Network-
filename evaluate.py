@@ -52,8 +52,20 @@ def test_step():
     loss_dict = {'obj_index':obj_index}
     loss_dict['elapse_time'] = elapse_time
     # calculate metrics with clamped volume for more accurate evaluation
-    loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
-    loss_dict['ssim_3d_clamp'] = round(get_ssim_3d(data_norm(volume_predict_clamp), data_norm(volume_gt), data_range=1), 8)
+    metric_fn = getattr(G_render, "quaternion_metric_fn", None)
+    if metric_fn is not None:
+        quality = metric_fn(volume_predict, volume_gt, clamp_min, clamp_max)
+    else:
+        quality = {
+            "psnr_3d_clamp": get_psnr(
+                data_norm(volume_predict_clamp), data_norm(volume_gt),
+            ),
+            "ssim_3d_clamp": get_ssim_3d(
+                data_norm(volume_predict_clamp), data_norm(volume_gt), data_range=1,
+            ),
+        }
+    loss_dict['psnr_3d_clamp'] = round(float(quality['psnr_3d_clamp']), 8)
+    loss_dict['ssim_3d_clamp'] = round(float(quality['ssim_3d_clamp']), 8)
     zero = volume_predict.new_zeros(())
     quaternion_aux = getattr(G_render, "last_quaternion_aux", {}) or {}
     for key in METRIC_KEYS:
@@ -106,7 +118,10 @@ if __name__ == '__main__':
 
     # logs
     # you can change uniform/random angle sampling, angle samping range, input views, scale (reconstruction resolution)
-    prefix = args.angle_sampling + '_start_' + str(args.start) + '_end_' + str(args.end) + '_nviews_' + str(args.nviews) + '_scale_' + str(args.eval_scale)
+    prefix = args.angle_sampling + '_start_' + str(args.start) + '_end_' + str(args.end) + '_nviews_' + str(args.nviews)
+    if args.angle_sampling == 'random_existing':
+        prefix += '_pattern_' + str(args.existing_view_pattern)
+    prefix += '_scale_' + str(args.eval_scale)
     logs_path = os.path.join(args.logs_path, args.name, prefix)
     os.makedirs(logs_path, exist_ok=True)
     visual_path = os.path.join(args.visual_path, args.name, prefix)

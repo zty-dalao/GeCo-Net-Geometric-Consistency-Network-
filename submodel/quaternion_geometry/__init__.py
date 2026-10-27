@@ -2,6 +2,7 @@
 
 from .calibration import PoseRefiner
 from .fusion import QuaternionAwareAggregator
+from .metrics import quaternion_reconstruction_metrics
 from .pose import (
     apply_pose_delta,
     axis_angle_to_quaternion,
@@ -32,6 +33,7 @@ __all__ = [
     "METRIC_KEYS",
     "PoseRefiner",
     "QuaternionAwareAggregator",
+    "quaternion_reconstruction_metrics",
     "apply_pose_delta",
     "axis_angle_to_quaternion",
     "pose_vec_to_quaternion",

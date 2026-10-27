@@ -9,7 +9,19 @@ def parse_args():
     parser.add_argument("--start", type=int, default=0, help="start scanning angle")  # it is recommended to use integer angle
     parser.add_argument("--end", type=int, default=360, help="end scanning angle")
     parser.add_argument("--nviews", "-V", type=int, default=20, help="Number of selected views",)
-    parser.add_argument("--angle_sampling", type=str, default="uniform", help="angle sampling strategy | uniform | random")
+    parser.add_argument(
+        "--angle_sampling",
+        choices=("uniform", "random", "random_existing"),
+        type=str,
+        default="uniform",
+        help="angle sampling: fixed uniform, online random DRR, or random subset of stored projections",
+    )
+    parser.add_argument(
+        "--existing_view_pattern",
+        choices=("random", "uniform"),
+        default="random",
+        help="pattern for random_existing: non-uniform random subset or equally spaced subset with random phase",
+    )
     parser.add_argument("--expnorm", action="store_false", help="Whether to use exponential projection normalization") 
     parser.add_argument("--train_scale", type=int, default=4, help="set downsampling scale manually during training stage")
     parser.add_argument("--fusion", type=str, default='ada', help="multi-view feature fusing strategy")
@@ -589,6 +601,7 @@ def parse_args():
                      'end scanning angle: ', str(args.end), '\n',
                      'input views: ' , str(args.nviews) , '\n',
                      'angle sampling: ', args.angle_sampling, '\n',
+                     'existing view pattern: ', args.existing_view_pattern, '\n',
                      'expnorm: ', "yes" if args.expnorm else "no", '\n',
                      'ray_batch_size: ', str(conf['render.ray_batch_size']), '\n',
                      'factor: ', str(conf['render.factor']), '\n' ,

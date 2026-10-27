@@ -496,3 +496,242 @@ python train.py --name smoke_b3_calib --datadir ./dataset/dental/syn_data \
   freezing both (B0) keeps the parameters allocated but never updates them.
   The evaluation run must repeat the same switches, otherwise the checkpoint
   is loaded into a differently configured refiner.
+
+## Existing-projection sampling: quick reference
+
+`random_existing` samples projections that already exist in `proj.nii.gz` and
+reads the matching geometry from `transforms.json` (`frames[i]["vec"]`). It never
+renders input DRRs from the GT volume, so the image and geometry always remain
+paired. This is suitable for pre-generated dental data and measured thorax data.
+
+```text
+--angle_sampling random_existing
+--existing_view_pattern random|uniform
+```
+
+- `random`: default; choose `nviews` distinct frame indices without replacement,
+  usually producing non-uniform angular gaps.
+- `uniform`: choose equal-spaced existing frames with a random phase. For 360
+  frames and 20 views, the spacing is 18 frames, but the first index changes.
+- This differs from the original `--angle_sampling uniform`, which always starts
+  at frame 0. Use the same two options for training and evaluation. If the range
+  contains fewer than `nviews` stored frames, the dataset raises an error.
+
+Training example:
+
+```bash
+python train.py --name dental_random_existing20 \
+  --datadir ./dataset/dental/syn_data --datatype dental \
+  --train_scale 4 --fusion ada --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing --existing_view_pattern random \
+  --is_train --epochs 300 --device cuda:0
+```
+
+Evaluation must use the same sampling configuration:
+
+```bash
+python evaluate.py --name dental_random_existing20 \
+  --datadir ./dataset/dental/syn_data --datatype dental --dataname test \
+  --train_scale 4 --eval_scale 4 --fusion ada --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing --existing_view_pattern random \
+  --resume_name 299 --device cuda:0
+```
+
+For thorax, `random_existing` is recommended because it preserves the recorded
+frame geometry, including the half-fan detector offset.
+
+## Existing-projection sampling / 已有投影采样（详细说明）
+
+### 中文
+
+本项目增加了 `--angle_sampling random_existing`。它从病例目录中已经保存的
+`proj.nii.gz` 和对应的 `transforms.json` 中选择投影，并使用同一索引的
+`frames[i]["vec"]` 作为几何，不会从 GT 体数据在线重新渲染 DRR。因此它适用于
+预生成的 dental/spine 投影，也适用于带有真实几何的 thorax 测量投影。
+
+新增参数为：
+
+```text
+--angle_sampling random_existing
+--existing_view_pattern random|uniform
+```
+
+`--existing_view_pattern random` 是默认值。它在 `[start,end)` 对应的已有 frame
+中无放回随机选择 `nviews` 个索引，选出的角度通常不等间隔：
+
+```bash
+python train.py \
+  --name dental_random_existing20 \
+  --datadir ./dataset/dental/syn_data \
+  --datatype dental --train_scale 4 --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing \
+  --existing_view_pattern random \
+  --is_train --epochs 300 --device cuda:0
+```
+
+例如完整数据有 `0,1,...,359` 度的 360 个 frame 时，一次取样可能得到
+`[3, 17, 41, 88, ...]`；下一个 epoch 或下一次读取同一病例时通常会得到另一组
+索引。`--nviews 10` 和 `--nviews 5` 的用法完全相同。
+
+`--existing_view_pattern uniform` 保持等间隔，但每次随机改变等间隔序列的相位。
+例如 360 个 frame、20 views 时，间隔为 18 个 frame，一次可能得到
+`[2,20,38,...,344]`，另一次可能得到 `[11,29,47,...,353]`。这与原来的
+`--angle_sampling uniform` 不同：原来的 uniform 每个病例始终使用固定的
+`[0,18,36,...,342]` 索引，而这里的 uniform 是随机相位的等间隔抽样。
+
+```bash
+python train.py \
+  --name dental_random_phase20 \
+  --datadir ./dataset/dental/syn_data \
+  --datatype dental --train_scale 4 --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing \
+  --existing_view_pattern uniform \
+  --is_train --epochs 300 --device cuda:0
+```
+
+评估时必须使用相同的采样模式和参数。例如：
+
+```bash
+python evaluate.py \
+  --name dental_random_existing20 \
+  --datadir ./dataset/dental/syn_data \
+  --datatype dental --dataname test \
+  --train_scale 4 --eval_scale 4 --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing \
+  --existing_view_pattern random \
+  --resume_name 299 --device cuda:0
+```
+
+对于 thorax，推荐使用 `random_existing`，因为它直接读取每个实测 frame 的
+`vec`，保留 half-fan 探测器偏移和真实角度约定：
+
+```bash
+python train.py \
+  --name thorax_random_existing20 \
+  --datadir ./dataset/thorax/syn_data \
+  --datatype thorax --train_scale 4 --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing \
+  --existing_view_pattern random \
+  --is_train --epochs 300 --device cuda:0
+```
+
+这里的 `random_existing` 不读取 GT 体数据来产生输入投影；GT 体数据仍然只用于
+训练/评估目标。若 `nviews` 大于指定角度范围内已有 frame 数量，数据集会直接报错。
+
+### English
+
+The project now supports `--angle_sampling random_existing`. This mode samples from
+the projections already stored in `proj.nii.gz` and uses the matching
+`transforms.json` entry `frames[i]["vec"]`. It does not render a new DRR from the GT
+volume. The image and geometry always come from the same frame index, so this mode is
+valid for pre-generated dental/spine projections and measured thorax projections.
+
+The new options are:
+
+```text
+--angle_sampling random_existing
+--existing_view_pattern random|uniform
+```
+
+`--existing_view_pattern random` is the default. It samples `nviews` distinct frame
+indices without replacement from the `[start,end)` range. The resulting views are
+generally non-uniformly spaced:
+
+```bash
+python train.py \
+  --name dental_random_existing20 \
+  --datadir ./dataset/dental/syn_data \
+  --datatype dental --train_scale 4 --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing \
+  --existing_view_pattern random \
+  --is_train --epochs 300 --device cuda:0
+```
+
+For a 360-frame sequence sampled at one degree, one call may select
+`[3, 17, 41, 88, ...]`, while the next call normally selects a different subset.
+Use `--nviews 10` or `--nviews 5` to change the number of selected views.
+
+`--existing_view_pattern uniform` keeps equal spacing but randomizes the phase of the
+sequence. With 360 frames and 20 views, the spacing is 18 frames; one call may select
+`[2,20,38,...,344]` and another may select `[11,29,47,...,353]`. This differs from the
+original `--angle_sampling uniform`, which always selects the fixed indices
+`[0,18,36,...,342]` for the same case and command-line range.
+
+```bash
+python train.py \
+  --name dental_random_phase20 \
+  --datadir ./dataset/dental/syn_data \
+  --datatype dental --train_scale 4 --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing \
+  --existing_view_pattern uniform \
+  --is_train --epochs 300 --device cuda:0
+```
+
+Evaluation must use the same sampling mode and pattern as training:
+
+```bash
+python evaluate.py \
+  --name dental_random_existing20 \
+  --datadir ./dataset/dental/syn_data \
+  --datatype dental --dataname test \
+  --train_scale 4 --eval_scale 4 --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing \
+  --existing_view_pattern random \
+  --resume_name 299 --device cuda:0
+```
+
+For thorax, `random_existing` is recommended because it reads the measured frame
+geometry directly and preserves the half-fan detector offset and the recorded angle
+convention:
+
+```bash
+python train.py \
+  --name thorax_random_existing20 \
+  --datadir ./dataset/thorax/syn_data \
+  --datatype thorax --train_scale 4 --fusion ada \
+  --start 0 --end 360 --nviews 20 \
+  --angle_sampling random_existing \
+  --existing_view_pattern random \
+  --is_train --epochs 300 --device cuda:0
+```
+
+In this mode the GT volume is not used to generate the input projections; it remains
+the training/evaluation target. The dataset raises an error if fewer than `nviews`
+stored frames are available in the requested angular range.
+
+### Sampling combinations at a glance
+
+`--angle_sampling` selects the sampling family. `--existing_view_pattern` is only
+used with `random_existing`:
+
+| Configuration | Existing projections | DRR rendered from GT | View pattern |
+|---|---:|---:|---|
+| `--angle_sampling uniform` | Yes | No | Fixed equal spacing, starts at frame 0 |
+| `random_existing + random` | Yes | No | Random, without replacement; usually non-uniform |
+| `random_existing + uniform` | Yes | No | Equal spacing with a random phase |
+| `--angle_sampling random` | No | Yes | Randomly generated angles |
+
+For example, with 360 one-degree frames and 20 views, `uniform` selects a fixed
+sequence such as `[0,18,36,...,342]`; `random_existing` with `random` selects a
+different subset such as `[3,17,41,88,...]`; and `random_existing` with `uniform`
+keeps an 18-frame gap but changes the starting phase, such as `[2,20,38,...]`.
+The latter two modes always keep each selected projection paired with its original
+`frames[i]["vec"]` geometry and are recommended for measured thorax data. Use the
+same `--angle_sampling`, `--existing_view_pattern`, `--start`, `--end`, and
+`--nviews` values during training and evaluation.
+
+### Train/validation/test metrics
+
+Quaternion runs now use `quaternion_reconstruction_metrics` from `metrics.py` for
+clamped 3-D PSNR and SSIM in every split. The helper preserves the root project's
+protocol: clamp, per-volume min-max normalization, and three-axis 3-D SSIM. The
+trainer writes `train_ssim_3d_clamp`, `val_ssim_3d_clamp`, and
+`test_ssim_3d_clamp` to metric logs and TensorBoard; standalone `evaluate.py`
+uses the same hook.

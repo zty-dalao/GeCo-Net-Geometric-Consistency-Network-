@@ -30,6 +30,29 @@ class trainer():
         self.test_data_loader = test_data_loader
         self.visual_data_loader = visual_data_loader
 
+    def _quality_metrics(self, volume_predict, volume_gt):
+        """Compute split metrics, delegating quaternion runs to its module."""
+        metric_fn = getattr(self.G_render, "quaternion_metric_fn", None)
+        if metric_fn is not None:
+            return metric_fn(
+                volume_predict, volume_gt, self.clamp_min, self.clamp_max,
+            )
+        volume_predict_clamp = torch.clamp(
+            volume_predict, self.clamp_min, self.clamp_max,
+        )
+        return {
+            "psnr_3d_clamp": float(
+                get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt))
+            ),
+            "ssim_3d_clamp": float(
+                get_ssim_3d(
+                    data_norm(volume_predict_clamp),
+                    data_norm(volume_gt),
+                    data_range=1,
+                )
+            ),
+        }
+
         # interval
         self.vis_interval = conf.get_int('train.print.vis_interval')    # 每隔多少 epoch 做一次可视化
         self.save_interval = conf.get_int('train.print.save_interval')  # 每隔多少 epoch 存一次历史 checkpoint
@@ -1566,16 +1589,9 @@ class trainer():
                 volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
                                                    volume_origin=volume_origin, volume_phy=volume_phy,
                                                    scale=self.G_render.decoder.scale, device=device)
-            volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
-            loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
-            loss_dict['ssim_3d_clamp'] = round(
-                get_ssim_3d(
-                    data_norm(volume_predict_clamp),
-                    data_norm(volume_gt),
-                    data_range=1,
-                ),
-                8,
-            )
+            quality = self._quality_metrics(volume_predict, volume_gt)
+            loss_dict['psnr_3d_clamp'] = round(quality['psnr_3d_clamp'], 8)
+            loss_dict['ssim_3d_clamp'] = round(quality['ssim_3d_clamp'], 8)
         # Restore the exact mixed train/eval state of the current phase. This
         # also reapplies the optional Decoder-BN running-statistics policy.
         self._apply_training_stage(epoch)
@@ -1700,8 +1716,9 @@ class trainer():
             loss_dict['mse_loss_2d'] = 0.0
 
         loss_dict['G_loss'] = round(total_loss.item(), 8)
-        loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
-        loss_dict['ssim_3d_clamp'] = round(get_ssim_3d(data_norm(volume_predict_clamp), data_norm(volume_gt), data_range=1), 8)
+        quality = self._quality_metrics(volume_predict, volume_gt)
+        loss_dict['psnr_3d_clamp'] = round(quality['psnr_3d_clamp'], 8)
+        loss_dict['ssim_3d_clamp'] = round(quality['ssim_3d_clamp'], 8)
 
         return loss_dict
 
@@ -1734,9 +1751,9 @@ class trainer():
                                                scale=self.G_render.decoder.scale, device=device)
 
         # alculate metrics with clamped volume for more accurate evaluation
-        volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
-        loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
-        loss_dict['ssim_3d_clamp'] = round(get_ssim_3d(data_norm(volume_predict_clamp), data_norm(volume_gt), data_range=1), 8)
+        quality = self._quality_metrics(volume_predict, volume_gt)
+        loss_dict['psnr_3d_clamp'] = round(quality['psnr_3d_clamp'], 8)
+        loss_dict['ssim_3d_clamp'] = round(quality['ssim_3d_clamp'], 8)
 
         # save the volume prediction
         os.makedirs(os.path.join(self.visual_path, obj_index + '/volume'), exist_ok=True)

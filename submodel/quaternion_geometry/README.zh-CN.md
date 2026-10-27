@@ -461,3 +461,39 @@ python train.py --name smoke_b3_calib --datadir ./dataset/dental/syn_data \
 - `--no_pose_refine_rotation` / `--no_pose_refine_translation` 用于冻结某个分支；两者都冻结
   即 B0，参数仍会被创建但永不更新。评估时必须重复相同的开关，否则 checkpoint 会被加载
   到一个配置不同的 refiner 中。
+
+## 视角采样参数组合
+
+`--angle_sampling` 决定采样大类；`--existing_view_pattern` 只有在
+`random_existing` 模式下生效：
+
+| 配置 | 是否读取已有投影 | 是否根据 GT 重新生成 DRR | 视角模式 |
+|---|---:|---:|---|
+| `--angle_sampling uniform` | 是 | 否 | 固定等间隔，从 frame 0 开始 |
+| `random_existing + random` | 是 | 否 | 无放回随机选择，通常不等间隔 |
+| `random_existing + uniform` | 是 | 否 | 等间隔选择，但随机改变起始相位 |
+| `--angle_sampling random` | 否 | 是 | 随机生成角度并在线渲染 |
+
+例如 360 个一度 frame、选择 20 个视角时：`uniform` 固定选择
+`[0,18,36,...,342]`；`random_existing + random` 可能选择
+`[3,17,41,88,...]`；`random_existing + uniform` 保持 18 个 frame 的间隔，
+但起始位置随机，例如 `[2,20,38,...]`。后两种模式都会使用同一索引的
+`frames[i]["vec"]`，保证投影和几何匹配，适合 thorax 实测数据。
+
+训练和评估必须保持以下参数一致：
+
+```text
+--angle_sampling
+--existing_view_pattern
+--start
+--end
+--nviews
+```
+
+## 训练/验证/测试指标
+
+四元数模式现在统一调用 `metrics.py` 中的 `quaternion_reconstruction_metrics`
+计算截断后的 3D PSNR 和 SSIM。该实现保持主项目原有口径：先截断，再对每个体
+数据分别做 min-max 归一化，并按三个轴计算 3D SSIM。训练器会把
+`train_ssim_3d_clamp`、`val_ssim_3d_clamp` 和 `test_ssim_3d_clamp` 写入指标日志
+及 TensorBoard；独立的 `evaluate.py` 也通过同一个接口计算测试指标。

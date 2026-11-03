@@ -299,8 +299,9 @@ conda run -n deeplearning python -m submodel.quaternion_view_synthesis.smoke_tes
 conda run -n deeplearning python -m submodel.quaternion_view_synthesis.train --smoke --name qvs_smoke
 ```
 
-会同时打分 train/val/test 三个 split（各 2 例 × 2 个目标角）并写 TensorBoard。实测输出
-（`--lambda_elastic_net 1e-2`，即默认值）：
+会同时打分 train/val/test 三个 split（各 2 例 × 2 个目标角）并写 TensorBoard。
+`--smoke` 会强制 `--eval_every 1 --save_every 1`，这样 1 个 epoch 也能看到指标变化和
+`ckpt_history/` 的生成。实测输出（`--lambda_elastic_net 1e-2`，即默认值）：
 
 ```text
 [qvs] subjects=2 parameters=0.838M device=cuda
@@ -363,8 +364,8 @@ python -m submodel.quaternion_view_synthesis.train ^
 
 #### 训练期指标与 TensorBoard
 
-每个 epoch（`--eval_every`）在 **train / val / test** 三个 split 上计算**投影域**
-PSNR / SSIM / L1，并写入 TensorBoard：
+每 `--eval_every` 个 epoch（**默认 5**）在 **train / val / test** 三个 split 上计算
+**投影域** PSNR / SSIM / L1，并写入 TensorBoard：
 
 ```bash
 tensorboard --logdir submodel/quaternion_view_synthesis/checkpoints/<name>/tensorboard
@@ -372,7 +373,7 @@ tensorboard --logdir submodel/quaternion_view_synthesis/checkpoints/<name>/tenso
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `--eval_every` | 1 | 每 N 个 epoch 算一次指标；0 表示关闭 |
+| `--eval_every` | 5 | 每 N 个 epoch 算一次指标；0 表示关闭 |
 | `--eval_limit` | 4 | 每个 split 用于估指标的病例数 |
 | `--eval_targets` | 4 | 每个病例固定使用的目标角度数 |
 | `--eval_splits` | `train,val,test` | 要打分的 split 列表 |
@@ -395,6 +396,51 @@ train/{psnr,ssim,l1}  val/{psnr,ssim,l1}  test/{psnr,ssim,l1}    (每 eval_every
 
 注意：这里的 PSNR/SSIM 是**合成投影与真值投影**之间的指标（投影域），不是重建体数据
 与 GT 体积之间的指标。体积域指标请用 `evaluate.py` / `infer.py`。
+
+#### 权重保存
+
+| 文件 | 频率 | 说明 |
+|---|---|---|
+| `ckpt_latest.pt` | **每个 epoch** | 总是被覆盖，用于续跑/最新状态 |
+| `ckpt_history/ckpt_XXXX.pt` | 每 `--save_every` 个 epoch（**默认 5**） | 零填充编号（`ckpt_0005.pt`、`ckpt_0010.pt`…），用于回滚与选模型 |
+
+checkpoint 内容：`model`、`ensemble`、**`optimizer`**、`args`、`epoch`、`steps_total`、
+`loss`、`rng_state`、`numpy_rng_state`。因为保存了 Adam 的一二阶矩和 RNG 状态，可以真正
+中断续训：
+
+```bash
+python -m submodel.quaternion_view_synthesis.train ^
+  --name qvs_dental ^
+  --resume submodel/quaternion_view_synthesis/checkpoints/qvs_dental/ckpt_history/ckpt_0020.pt ^
+  --epochs 40
+```
+
+注意：
+
+* `--epochs` 是**总** epoch 数，不是"再训多少"；从 20 续训到 40 就传 `--epochs 40`。
+* 续训时请传与原来相同的 `--name`，否则会写到新目录（脚本会打印提示）。
+* 续训不会再记录一次 `step=0` 的指标；指标按 `(epoch+1) % eval_every` 继续。
+* 旧 checkpoint（没有 `optimizer` 字段）仍可加载，脚本会提示 Adam 动量重置。
+
+实测（`--limit 1 --epochs 6 --n_targets 1`，同一随机种子）：
+
+| epoch | 一口气训 6 epoch | 训 3 epoch → `--resume` → 再训到 6 |
+|---|---|---|
+| 3 | 0.01661 | **0.01663** |
+| 4 | 0.01324 | **0.01325** |
+| 5 | 0.02524 | **0.02527** |
+
+差异在 1e-5 量级（cuDNN 非确定性），说明优化器状态与数据采样顺序都被正确恢复。
+
+实测（`--epochs 6`，默认 `--eval_every 5 --save_every 5`）：
+
+```text
+[qvs] scoring splits ['train', 'val', 'test'] every 5 epoch(s), 4 subject(s) x 4 target(s) each
+[qvs] epoch   0 ... psnr/ssim 记录一次（初始权重）
+[qvs] epoch 1..4 ... 只训练，不算指标
+[qvs] saved snapshot .../ckpt_history/ckpt_0005.pt
+[qvs] epoch   5 ... psnr/ssim 再记录一次
+```
 
 ### 8.5 测试（仅指标，test split）
 

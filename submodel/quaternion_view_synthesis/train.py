@@ -64,7 +64,7 @@ def parse_args(argv=None):
     parser.add_argument("--log_every", type=int, default=1)
 
     # metric / TensorBoard options
-    parser.add_argument("--eval_every", type=int, default=1,
+    parser.add_argument("--eval_every", type=int, default=5,
                         help="score train/val/test every N epochs (0 disables)")
     parser.add_argument("--eval_limit", type=int, default=4,
                         help="subjects per split used for the metric estimate")
@@ -76,6 +76,13 @@ def parse_args(argv=None):
                         help="defaults to <out_dir>/<name>/tensorboard")
     parser.add_argument("--no_tensorboard", action="store_true")
 
+    # checkpointing
+    parser.add_argument("--save_every", type=int, default=5,
+                        help="write ckpt_history/ckpt_XXXX.pt every N epochs (0 disables); "
+                             "ckpt_latest.pt is always updated")
+    parser.add_argument("--resume", default=None,
+                        help="checkpoint to continue from (model + ensemble + optimizer + epoch)")
+
     parser.add_argument("--smoke", action="store_true", help="tiny run: 1 epoch, 2 subjects")
     args = parser.parse_args(argv)
 
@@ -86,7 +93,18 @@ def parse_args(argv=None):
         args.image_size = min(args.image_size, 128)
         args.eval_limit = min(args.eval_limit, 2)
         args.eval_targets = min(args.eval_targets, 2)
+        # keep the smoke fast *and* observable: score every epoch, snapshot every epoch
+        args.eval_every = 1
+        args.save_every = 1
     return args
+
+
+def optimizer_to(optimizer, device):
+    """Move the Adam moment buffers to ``device`` after ``load_state_dict``."""
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value):
+                state[key] = value.to(device)
 
 
 def build_eval_sets(args):
@@ -181,6 +199,30 @@ def main(argv=None):
     parameters = list(model.parameters()) + list(ensemble.parameters())
     optimizer = torch.optim.Adam(parameters, lr=args.lr)
 
+    start_epoch = 0
+    steps_total = 0
+    if args.resume:
+        state = torch.load(args.resume, map_location=device, weights_only=False)
+        model.load_state_dict(state["model"])
+        ensemble.load_state_dict(state["ensemble"])
+        if state.get("optimizer") is not None:
+            optimizer.load_state_dict(state["optimizer"])
+            optimizer_to(optimizer, device)
+        else:
+            print("[qvs] resume: checkpoint has no optimizer state, Adam moments restart")
+        start_epoch = int(state.get("epoch", -1)) + 1
+        steps_total = int(state.get("steps_total", 0))
+        if state.get("rng_state") is not None:
+            torch.set_rng_state(state["rng_state"].cpu())
+        if state.get("numpy_rng_state") is not None:
+            np.random.set_state(state["numpy_rng_state"])
+        recorded_name = state.get("args", {}).get("name")
+        if recorded_name and recorded_name != args.name:
+            print(f"[qvs] resume: checkpoint was written by name='{recorded_name}', "
+                  f"but --name='{args.name}' -> a new output directory is used")
+        print(f"[qvs] resumed from {args.resume} at epoch {start_epoch} "
+              f"(steps_total={steps_total})")
+
     out_dir = Path(args.out_dir) / args.name
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "train_args.json").write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
@@ -211,11 +253,10 @@ def main(argv=None):
                 for name, value in metrics.items():
                     writer.add_scalar(f"{split}/{name}", value, epoch)
 
-    if eval_sets:
+    if eval_sets and start_epoch == 0:
         record_metrics(0)
 
-    steps_total = 0
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         ensemble.train()
         epoch_start = time.time()
@@ -289,14 +330,25 @@ def main(argv=None):
                     )
 
         mean_loss = running / max(steps, 1)
+        step_index = epoch + 1
         checkpoint = {
             "model": model.state_dict(),
             "ensemble": ensemble.state_dict(),
+            "optimizer": optimizer.state_dict(),
             "args": vars(args),
             "epoch": epoch,
+            "steps_total": steps_total,
             "loss": mean_loss,
+            "rng_state": torch.get_rng_state(),
+            "numpy_rng_state": np.random.get_state(),
         }
         torch.save(checkpoint, out_dir / "ckpt_latest.pt")
+        if args.save_every and step_index % args.save_every == 0:
+            history_dir = out_dir / "ckpt_history"
+            history_dir.mkdir(parents=True, exist_ok=True)
+            snapshot = history_dir / f"ckpt_{step_index:04d}.pt"
+            torch.save(checkpoint, snapshot)
+            print(f"[qvs] saved snapshot {snapshot}")
         print(
             f"[qvs] epoch {epoch} done mean_fused_l1={mean_loss:.5f} "
             f"elapsed={time.time() - epoch_start:.1f}s ckpt={out_dir / 'ckpt_latest.pt'}"

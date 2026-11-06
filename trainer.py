@@ -4,6 +4,10 @@ from models.render import *
 from util.util_func import *
 import datetime
 from models.loss import *
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
 
 '''引入小波变换模块'''
 from submodel.wavelet_preprocess.wavelet_process import real_value_wavelet_transformer 
@@ -28,6 +32,7 @@ class trainer():
         self.save_interval = conf.get_int('train.print.save_interval')  # 每隔多少 epoch 存一次历史 checkpoint
         self.val_interval = conf.get_int('train.print.val_interval')    # 每隔多少 epoch 验证一次
         self.test_interval = conf.get_int('train.print.test_interval')  # 每隔多少 epoch 测试一次
+        self.train_ssim_interval = conf.get_int('train.print.train_ssim_interval')
 
         # loss lambda
         self.mse_lambda_2d = conf.get_float('train.G_loss.mse_lambda_2d')
@@ -72,6 +77,8 @@ class trainer():
         os.makedirs(self.visual_path, exist_ok=True)
         self.checkpoints_path = os.path.join(args.checkpoints_path, args.name)
         os.makedirs(self.checkpoints_path, exist_ok=True)
+        self.tensorboard_path = os.path.join(self.logs_path, 'tensorboard')
+        self.writer = SummaryWriter(self.tensorboard_path) if SummaryWriter is not None else None
 
         # lr scheduler & optimizer
         init_lr = conf.get_float('lr_sche.init_lr')
@@ -117,7 +124,7 @@ class trainer():
             if 'G_optim' in data: self.G_optim.load_state_dict(data['G_optim'])
             if 'G_lr_scheduler' in data: self.G_lr_scheduler.load_state_dict(data['G_lr_scheduler'])
 
-    def train_step(self, data,):
+    def train_step(self, data, compute_ssim=False):
         device = self.device
         # data loading
         src_images = data["images"].to(device=device).squeeze(0)    # 从 DataLoader 返回的 batch dict 中取出投影图像张量。搬到计算设备（GPU cuda）。即 [20, 1, 512, 512]（20 个视角、单通道灰度、512×512）
@@ -199,8 +206,13 @@ class trainer():
                                                volume_origin=volume_origin, volume_phy=volume_phy,
                                                scale=self.G_render.decoder.scale, device=device)
             volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
-            # 3d ssim calculation is too slow, so we only calculate psnr
+            # PSNR is calculated every time; SSIM is enabled only on the
+            # configured training-SSIM epochs because it is considerably slower.
             loss_dict['psnr_3d_clamp'] = round(get_psnr(data_norm(volume_predict_clamp), data_norm(volume_gt)), 8)
+            if compute_ssim:
+                loss_dict['ssim_3d_clamp'] = round(
+                    get_ssim_3d(data_norm(volume_predict_clamp), data_norm(volume_gt), data_range=1), 8
+                )
         self.G_render.train()
         return loss_dict
 
@@ -305,8 +317,10 @@ class trainer():
                 print('Network Training')
                 train_batch = 0
                 train_psnr_3d_clamp = 0 
+                compute_train_ssim = (epoch % self.train_ssim_interval == 0)
+                train_ssim_3d_clamp = 0
                 for train_data in self.train_data_loader:
-                    train_losses = self.train_step(train_data)
+                    train_losses = self.train_step(train_data, compute_ssim=compute_train_ssim)
                     train_loss_str = fmt_loss_str(train_losses)
                     now = datetime.datetime.now()
                     f_train_ls = open(self.logs_path + '/train_ls.txt', mode='a')
@@ -320,6 +334,8 @@ class trainer():
 
                     # batch psnr
                     train_psnr_3d_clamp = train_psnr_3d_clamp + train_losses['psnr_3d_clamp']
+                    if compute_train_ssim:
+                        train_ssim_3d_clamp += train_losses['ssim_3d_clamp']
 
                 # epoch psnr
                 train_psnr_3d_clamp = train_psnr_3d_clamp / train_batch
@@ -329,6 +345,17 @@ class trainer():
                     now.strftime('%Y-%m-%d %H:%M:%S') + ' Epoch:' + str(epoch) + ' train_psnr_3d_clamp:' + str(train_psnr_3d_clamp) + '\n')
                 f_train_psnr.close()
                 print("*** train:", now.strftime('%Y-%m-%d %H:%M:%S'), "Epoch:", epoch, 'train_psnr_3d_clamp:', str(train_psnr_3d_clamp))
+                if compute_train_ssim:
+                    train_ssim_3d_clamp = train_ssim_3d_clamp / train_batch
+                    with open(self.logs_path + '/train_metric.txt', mode='a') as f_train_ssim:
+                        f_train_ssim.write(
+                            now.strftime('%Y-%m-%d %H:%M:%S') + ' Epoch:' + str(epoch) +
+                            ' train_ssim_3d_clamp:' + str(train_ssim_3d_clamp) + '\n')
+                    print("*** train:", "Epoch:", epoch, 'train_ssim_3d_clamp:', str(train_ssim_3d_clamp))
+                if self.writer is not None:
+                    self.writer.add_scalar('train/psnr_3d_clamp', train_psnr_3d_clamp, epoch)
+                    if compute_train_ssim:
+                        self.writer.add_scalar('train/ssim_3d_clamp', train_ssim_3d_clamp, epoch)
 
                 # network saving
                 print("saving network & optimizer")
@@ -373,9 +400,13 @@ class trainer():
                     f_val_psnr.close()
                     print("*** validate:", now.strftime('%Y-%m-%d %H:%M:%S'), "Epoch:", epoch, 'val_psnr_3d_clamp:', str(val_psnr_3d_clamp), 
                           'val_ssim_3d_clamp:'+ str(val_ssim_3d_clamp) + '\n') 
+                    if self.writer is not None:
+                        self.writer.add_scalar('val/psnr_3d_clamp', val_psnr_3d_clamp, epoch)
+                        self.writer.add_scalar('val/ssim_3d_clamp', val_ssim_3d_clamp, epoch)
 
-                # test with the test dataset
-                if ((epoch % self.test_interval == 0) and (epoch > 0)) or epoch == self.num_epochs - 1:
+                # test with the test dataset every epoch by default; the
+                # dataset-level mean PSNR/SSIM is accumulated below.
+                if (epoch % self.test_interval == 0) or epoch == self.num_epochs - 1:
                     print('Network Testing')
                     test_batch = 0
                     test_psnr_3d_clamp = 0
@@ -413,6 +444,9 @@ class trainer():
                     f_test_psnr.close()
                     print("*** test:", now.strftime('%Y-%m-%d %H:%M:%S'), "Epoch:", epoch, 'test_psnr_3d_clamp:', str(test_psnr_3d_clamp), 
                     'test_ssim_3d_clamp:', str(test_ssim_3d_clamp), '\n')
+                    if self.writer is not None:
+                        self.writer.add_scalar('test/psnr_3d_clamp', test_psnr_3d_clamp, epoch)
+                        self.writer.add_scalar('test/ssim_3d_clamp', test_ssim_3d_clamp, epoch)
 
                 # lr schedule
                 self.G_lr_scheduler.step()
@@ -431,6 +465,9 @@ class trainer():
                         f_vis_psnr.write(now.strftime('%Y-%m-%d %H:%M:%S') + ' Epoch:' + str(epoch) + vis_loss_str + '\n')
                         f_vis_psnr.close()
                         print("*** visual:", now.strftime('%Y-%m-%d %H:%M:%S'), " Epoch:", epoch, vis_loss_str)
+
+            if self.writer is not None:
+                self.writer.close()
         
         # visualization when not training (must resume some trained net)
         else:
@@ -447,3 +484,5 @@ class trainer():
                 f_vis_psnr.write(now.strftime('%Y-%m-%d %H:%M:%S') + ' visualization:' + vis_loss_str + '\n')
                 f_vis_psnr.close()
                 print("*** visual:", now.strftime('%Y-%m-%d %H:%M:%S'), vis_loss_str)
+            if self.writer is not None:
+                self.writer.close()

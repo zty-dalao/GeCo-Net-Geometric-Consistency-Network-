@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 from models.ResEncoder import ResEncoder
@@ -34,7 +35,8 @@ class model(nn.Module):
     def forward(self, xyz_world):
         x,y,z = xyz_world.shape[:3]                                 # 下采样后的尺寸 [x,y,z]=[X/4,Y/4,Z/4]
         points = xyz_world.contiguous().reshape(-1,3)               # 所有点坐标
-        pnts_split = torch.split(points,100000)                     # 分块省显存
+        point_chunk_size = int(os.environ.get('POINT_CHUNK_SIZE', '100000'))
+        pnts_split = torch.split(points, point_chunk_size)          # 分块省显存
         h = []
         for pnts in pnts_split:
             latent = self.encoder.queryfeature(pnts)                # ① encoder 特征回投影 [nviews, C, npts]

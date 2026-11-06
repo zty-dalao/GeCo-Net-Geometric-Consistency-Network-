@@ -28,8 +28,9 @@ class WaveletProcess(nn.Module):
         super().__init__()
         if DWTForward is None:
             raise ImportError(
-                "WaveletProcess requires pytorch-wavelets. Install it with "
-                "`python -m pip install pytorch-wavelets`."
+                "WaveletProcess requires pytorch-wavelets and its PyWavelets "
+                "dependency. Install them with `python -m pip install "
+                "pytorch-wavelets PyWavelets`."
             ) from _IMPORT_ERROR
         if not isinstance(level, int) or level < 1:
             raise ValueError(f"level must be a positive integer, got {level!r}")

@@ -3,7 +3,7 @@
 Install the runtime dependency in the training environment:
 
 ```bash
-python -m pip install pytorch-wavelets
+python -m pip install pytorch-wavelets PyWavelets
 ```
 
 The default transform accepts `[N, 1, H, W]` and returns `[N, 4, H, W]` in

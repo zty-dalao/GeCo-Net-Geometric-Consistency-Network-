@@ -46,6 +46,22 @@ In our experiments, we apply Digitally Reconstructed Radiography (DRR) technique
 
 In this way, you will get a data folder `./dataset/dental/syn_data` or `./dataset/spine/syn_data` that containing synthesized X-ray projections and geometry description files for each scanned object. It will generate 360 projections uniformly spaced within the angle range of [0, 360).
 
+### 参数解析
+
+|参数|含义|
+|----|----|
+|-n / --name|实验名称，例如 dental_wavelet_db4|
+|-D / --datadir|数据集目录|
+|--datatype|数据类型，控制数据划分和体素值截断|
+|--train_scale|3D 体数据的训练下采样倍率|
+|--fusion|多视角特征融合方式|
+|--start|起始扫描角度，单位是度|
+|--end|结束扫描角度，单位是度|
+|--nviews|每个样本使用多少个投影视角|
+|--angle_sampling|视角采样方式|
+|--is_train|开启训练模式的开关|
+
+
 ## Train
 After preparing the dataset and X-ray simulation, you could run the following command to train your model.
 

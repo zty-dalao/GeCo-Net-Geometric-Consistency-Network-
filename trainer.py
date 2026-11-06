@@ -5,6 +5,10 @@ from util.util_func import *
 import datetime
 from models.loss import *
 
+'''引入小波变换模块'''
+from submodel.wavelet_preprocess.wavelet_process import real_value_wavelet_transformer 
+
+
 class trainer():
     def __init__(self, G_render, train_data_loader, val_data_loader, test_data_loader, visual_data_loader, args,
                  conf, device=None):
@@ -132,9 +136,19 @@ class trainer():
         volume_resolution = torch.tensor(data['paras']['volume_resolution']).to(device).to(torch.int64)         # 各维度的体素数（如 [128, 128, 128]），转成 int64（后面 make_coords 用 torch.linspace 生成网格需要整数长度）。这个值决定了重建网格的采样点数
         
         loss_dict = {}
+
+        '''
+        这里对图像进行小波变换操作
         
+        然后将self.G_render.encoder(src_images, src_poses)中的src_images换成小波变换后的图像images_after_wavelet_transformer
+        '''
+        images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
+
         # 2d projection encoding
-        self.G_render.encoder(src_images, src_poses)    # model的ResEncoder
+        '''这里要修改'''
+        # self.G_render.encoder(src_images, src_poses)    # model的ResEncoder
+        self.G_render.encoder(images_after_wavelet_transformer, src_poses)    # model的ResEncoder
+
         # 3d volume decoding
         volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
                                            volume_origin=volume_origin, volume_phy=volume_phy,
@@ -177,7 +191,10 @@ class trainer():
         # first set G_render to eval state, calculate the PSNR, and turn it back to train state
         self.G_render.eval()
         with torch.no_grad():
-            self.G_render.encoder(src_images, src_poses)
+            '''这里也要将self.G_render.encoder(src_images, src_poses)中的src_images换成小波变换后的图像images_after_wavelet_transformer'''
+            # self.G_render.encoder(src_images, src_poses)
+            self.G_render.encoder(images_after_wavelet_transformer, src_poses)
+
             volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
                                                volume_origin=volume_origin, volume_phy=volume_phy,
                                                scale=self.G_render.decoder.scale, device=device)
@@ -208,7 +225,11 @@ class trainer():
         }
 
         # 2d projection encoding
-        self.G_render.encoder(src_images, src_poses)
+        '''这里也需要进行小波变换'''
+        images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
+        # self.G_render.encoder(src_images, src_poses)
+        self.G_render.encoder(images_after_wavelet_transformer, src_poses)
+
         # 3d volume decoding
         volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
                                            volume_origin=volume_origin, volume_phy=volume_phy,
@@ -243,7 +264,11 @@ class trainer():
         }
 
         # 2d projection encoding
-        self.G_render.encoder(src_images, src_poses)
+        '''这里也需要进行小波变换'''
+        images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
+        # self.G_render.encoder(src_images, src_poses)
+        self.G_render.encoder(images_after_wavelet_transformer, src_poses)
+        
         # 3d volume decoding
         volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
                                             volume_origin=volume_origin, volume_phy=volume_phy,

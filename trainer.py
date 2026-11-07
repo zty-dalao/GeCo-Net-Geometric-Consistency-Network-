@@ -21,6 +21,10 @@ class trainer():
         self.conf = conf
         self.device = device
 
+        '''这里添加了AMP（自动混合精度）的初始化'''
+        self.amp_enabled = str(device).startswith('cuda') and not args.no_amp
+        self.scaler = torch.amp.GradScaler('cuda', enabled=self.amp_enabled)
+
         # dataloader
         self.train_data_loader = train_data_loader
         self.val_data_loader = val_data_loader
@@ -79,6 +83,7 @@ class trainer():
         os.makedirs(self.checkpoints_path, exist_ok=True)
         self.tensorboard_path = os.path.join(self.logs_path, 'tensorboard')
         self.writer = SummaryWriter(self.tensorboard_path) if SummaryWriter is not None else None
+        print('AMP:', 'enabled (float16 autocast + GradScaler)' if self.amp_enabled else 'disabled')
 
         # lr scheduler & optimizer
         init_lr = conf.get_float('lr_sche.init_lr')
@@ -98,6 +103,10 @@ class trainer():
         self.history_model_path = "%s/ckpt_history/ckpt_" % (self.checkpoints_path,)# 按 epoch 归档的历史权重
         if args.resume: 
             self.load_ckpt(self.resume_name)    # 断电加载
+
+    def amp_context(self):
+        # encoder / aggregator / decoder 使用 AMP；几何坐标和部分 volume rendering 保持 FP32。
+        return torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.amp_enabled)
         
     def save_ckpt(self, epoch):
         data = {
@@ -152,14 +161,17 @@ class trainer():
         images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
 
         # 2d projection encoding
-        '''这里要修改'''
+        '''这里要修改，小波+添加amp混合精度'''
         # self.G_render.encoder(src_images, src_poses)    # model的ResEncoder
-        self.G_render.encoder(images_after_wavelet_transformer, src_poses)    # model的ResEncoder
+        with self.amp_context():
+            self.G_render.encoder(images_after_wavelet_transformer, src_poses)    # encoder 使用 AMP
 
         # 3d volume decoding
-        volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
-                                           volume_origin=volume_origin, volume_phy=volume_phy,
-                                           scale=self.G_render.decoder.scale, device=device)                    # 获得反投影后的体素空间表示
+        '''这里要修改，小波+添加amp混合精度'''
+        with self.amp_context():
+            volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
+                                               volume_origin=volume_origin, volume_phy=volume_phy,
+                                               scale=self.G_render.decoder.scale, device=device)                # aggregator / decoder 使用 AMP；坐标生成和几何计算在函数内保持 FP32
 
         self.G_optim.zero_grad()
         # 3d loss，体素空间级别的L1 loss
@@ -180,9 +192,11 @@ class trainer():
             proj_gt = images_gt_all[pix_inds]
             src_rays = get_rays(src_poses, H, W)
             proj_rays = src_rays.view(-1, src_rays.shape[-1])[pix_inds].to(device=device)
-            proj_predict = composite(rays=proj_rays, volume=volume_predict, volume_origin=volume_origin,
-                                        volume_phy=volume_phy, render_step_size=render_step_size, 
-                                        chunksize=self.chunksize).reshape(proj_gt.shape)
+            '''2D projection loss 中的 composite() 已显式使用 FP32'''
+            with torch.autocast(device_type=torch.device(device).type, enabled=False):
+                proj_predict = composite(rays=proj_rays, volume=volume_predict.float(), volume_origin=volume_origin,
+                                         volume_phy=volume_phy, render_step_size=render_step_size,
+                                         chunksize=self.chunksize).reshape(proj_gt.shape)  # volume rendering 保持 FP32
             if self.expnorm:
                 proj_predict = torch.exp(-proj_predict/self.divide)
             mse_loss_2d = self.mse_loss(proj_predict, proj_gt) * self.mse_lambda_2d
@@ -192,19 +206,27 @@ class trainer():
         loss_dict['G_loss'] = round(G_loss.item(), 8)
 
         # update model
-        G_loss.backward()
-        self.G_optim.step()
+        '''这里的反向传播改为了amp版本'''
+        if self.amp_enabled:
+            self.scaler.scale(G_loss).backward()
+            self.scaler.step(self.G_optim)
+            self.scaler.update()
+        else:
+            G_loss.backward()
+            self.G_optim.step()
 
         # first set G_render to eval state, calculate the PSNR, and turn it back to train state
         self.G_render.eval()
         with torch.no_grad():
             '''这里也要将self.G_render.encoder(src_images, src_poses)中的src_images换成小波变换后的图像images_after_wavelet_transformer'''
             # self.G_render.encoder(src_images, src_poses)
-            self.G_render.encoder(images_after_wavelet_transformer, src_poses)
+            with self.amp_context():
+                self.G_render.encoder(images_after_wavelet_transformer, src_poses)  # encoder 使用 AMP
 
-            volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
-                                               volume_origin=volume_origin, volume_phy=volume_phy,
-                                               scale=self.G_render.decoder.scale, device=device)
+            with self.amp_context():
+                volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
+                                                   volume_origin=volume_origin, volume_phy=volume_phy,
+                                                   scale=self.G_render.decoder.scale, device=device)            # decoder 使用 AMP；几何坐标保持 FP32
             volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
             # PSNR is calculated every time; SSIM is enabled only on the
             # configured training-SSIM epochs because it is considerably slower.
@@ -240,12 +262,14 @@ class trainer():
         '''这里也需要进行小波变换'''
         images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
         # self.G_render.encoder(src_images, src_poses)
-        self.G_render.encoder(images_after_wavelet_transformer, src_poses)
+        with self.amp_context():
+            self.G_render.encoder(images_after_wavelet_transformer, src_poses)  # encoder 使用 AMP
 
         # 3d volume decoding
-        volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
-                                           volume_origin=volume_origin, volume_phy=volume_phy,
-                                           scale=self.G_render.decoder.scale, device=device)
+        with self.amp_context():
+            volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
+                                               volume_origin=volume_origin, volume_phy=volume_phy,
+                                               scale=self.G_render.decoder.scale, device=device)                # decoder 使用 AMP；几何坐标保持 FP32
         
         # metrics calculation
         volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)
@@ -279,12 +303,14 @@ class trainer():
         '''这里也需要进行小波变换'''
         images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
         # self.G_render.encoder(src_images, src_poses)
-        self.G_render.encoder(images_after_wavelet_transformer, src_poses)
+        with self.amp_context():
+            self.G_render.encoder(images_after_wavelet_transformer, src_poses)  # encoder 使用 AMP
         
         # 3d volume decoding
-        volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
-                                            volume_origin=volume_origin, volume_phy=volume_phy,
-                                            scale=self.G_render.decoder.scale, device=device)
+        with self.amp_context():
+            volume_predict = predict_3d_volume(model=self.G_render, volume_resolution=volume_resolution,
+                                               volume_origin=volume_origin, volume_phy=volume_phy,
+                                               scale=self.G_render.decoder.scale, device=device)                # decoder 使用 AMP；几何坐标保持 FP32
 
         # alculate metrics with clamped volume for more accurate evaluation
         volume_predict_clamp = torch.clamp(volume_predict, self.clamp_min, self.clamp_max)

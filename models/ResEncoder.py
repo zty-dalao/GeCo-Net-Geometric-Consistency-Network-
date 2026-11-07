@@ -344,6 +344,9 @@ class ResEncoder(nn.Module):
         feature_list = []
         for i in range(len(self.latent_list)):
             latent = self.latent_list[i]
-            feature_list.append(F.grid_sample(latent, uv, align_corners=True, mode='bilinear', padding_mode='zeros',))  
+            # 几何坐标 uv 在前面的计算中保持 FP32；grid_sample 要求 input/grid
+            # dtype 一致，因此这里只在采样算子入口匹配 encoder 特征 dtype。
+            sample_grid = uv.to(dtype=latent.dtype)
+            feature_list.append(F.grid_sample(latent, sample_grid, align_corners=True, mode='bilinear', padding_mode='zeros',))
         feature = torch.cat(feature_list, dim=1)# 有尺度按通道拼接 → C_total = 16(conv1)+16+32+64+128 = 256，正好等于配置里的 latent_size=256
         return feature[:,:,:,0]                 # 最终返回 [nviews, 256, N]：每个点 n 在视角 v 下，从多尺度特征图采到的 256 维特征向量。

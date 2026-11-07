@@ -46,6 +46,13 @@ In our experiments, we apply Digitally Reconstructed Radiography (DRR) technique
 
 In this way, you will get a data folder `./dataset/dental/syn_data` or `./dataset/spine/syn_data` that containing synthesized X-ray projections and geometry description files for each scanned object. It will generate 360 projections uniformly spaced within the angle range of [0, 360).
 
+## Train
+After preparing the dataset and X-ray simulation, you could run the following command to train your model.
+
+    python train.py -n=<Expname> -D=./dataset/dental/syn_data --datatype=dental --train_scale=4 --fusion=ada --start=0 --end=360 --nviews=20 --angle_sampling=uniform --is_train 
+
+In this way, you would train a model with 20 input views uniformly spaced within [0, 360) on dental dataset. The downsampling rate during training S=4, and it adopts adaptive feature fusing strategy proposed in our paper. Other hyperparameters are set as default. You may modify these hyperparamters to train your own model. The training process may take about 20 hours until convergence.
+
 ### 参数解析
 
 |参数|含义|
@@ -61,13 +68,36 @@ In this way, you will get a data folder `./dataset/dental/syn_data` or `./datase
 |--angle_sampling|视角采样方式|
 |--is_train|开启训练模式的开关|
 
+未来控制显存的占用，在[models/model.py](E:/workspace/Geometry-Aware-Attenuation-Learning-for-Sparse-View-CBCT-Reconstruction-main/models/model.py) 加入了可调环境变量中POINT_CHUNK_SIZE，默认为**100000**，基一次查询多少点，命令可以更改为如下：
+```bash
+export POINT_CHUNK_SIZE=20000
 
-## Train
-After preparing the dataset and X-ray simulation, you could run the following command to train your model.
+python train.py \
+  -n=dental_wavelet_db4_chunk20000 \
+  -D=./dataset/dental/syn_data \
+  --datatype=dental \
+  --train_scale=4 \
+  --fusion=ada \
+  --start=0 \
+  --end=360 \
+  --nviews=20 \
+  --angle_sampling=uniform \
+  --is_train
+```
 
-    python train.py -n=<Expname> -D=./dataset/dental/syn_data --datatype=dental --train_scale=4 --fusion=ada --start=0 --end=360 --nviews=20 --angle_sampling=uniform --is_train 
-
-In this way, you would train a model with 20 input views uniformly spaced within [0, 360) on dental dataset. The downsampling rate during training S=4, and it adopts adaptive feature fusing strategy proposed in our paper. Other hyperparameters are set as default. You may modify these hyperparamters to train your own model. The training process may take about 20 hours until convergence.
+这里因为fp32显存占用巨大，所以我们使用了amp混合精度：
+| 结构 | 精度 |
+| --- | --- |
+|encoder                  |AMP / FP16|
+|aggregator               |AMP / FP16|
+|decoder                  |AMP / FP16|
+|GradScaler               |启用|
+|世界坐标生成              |FP32|
+|射线-平面几何计算          |FP32|
+|3D 点投影几何计算          |FP32|
+|部分 grid_sample 输入     |与特征 dtype 匹配|
+|volume rendering         |FP32|
+|loss                     |FP32|
 
 ## Evaluate
 Once the above training converged, you could run the following command to evaluate your model on test dataset.

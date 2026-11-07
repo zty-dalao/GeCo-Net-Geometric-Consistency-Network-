@@ -21,6 +21,7 @@ def parse_args():
     parser.add_argument("--datadir", "-D", type=str, default='dataset/dental/syn_data', help="Dataset directory")
     parser.add_argument("--conf", "-c", type=str, default='conf/train.conf', help='Config file')
     parser.add_argument("--device", type=str, default='cuda', help='compute device')
+    parser.add_argument("--no-amp", action="store_true", help="disable CUDA automatic mixed precision")
     parser.add_argument("--is_train", action="store_true", help="Training or visualization")
     parser.add_argument("--resume", "-r", action="store_true", help="continue training")
     parser.add_argument("--resume_name", type=str, default=None, help='resume which trained net for continue training')

@@ -39,13 +39,14 @@ class model(nn.Module):
         pnts_split = torch.split(points, point_chunk_size)          # 分块省显存
         h = []
         for pnts in pnts_split:
-            latent = self.encoder.queryfeature(pnts)                # ① encoder 特征回投影 [nviews, C, npts]
+            with torch.autocast(device_type=xyz_world.device.type, enabled=False):
+                latent = self.encoder.queryfeature(pnts)             # 几何投影、grid_sample 和坐标相关计算保持 FP32
             if self.fusion=='max':
                 h.append(torch.max(latent, dim=0)[0])               # ② 聚合多视角特征 [C, npts]
             elif self.fusion=='mean':
                 h.append(torch.mean(latent, dim=0))                 # ② 聚合多视角特征 [C, npts]
             else:
-                h.append(self.aggregator(latent))                   # ② 聚合多视角特征 [C, npts]
+                h.append(self.aggregator(latent))                   # ② aggregator 在外层 autocast 中使用 AMP
             
         h = torch.cat(h,dim=1)
         outputs = h.reshape(1,-1,x,y,z)                             # ③ 低分辨率特征体积 [1, C, X/4, Y/4, Z/4]
@@ -53,4 +54,4 @@ class model(nn.Module):
                                                                     # ④ self.decoder(outputs)：★ decoder 3D 上采样 [1, 1, X, Y, Z]
                                                                     # [0,0,:,:,:].transpose(0,2)：⑤ 对齐 ITK-SNAP 显示格式
         outputs = self.last_layer_act(outputs)                      # ⑥ GELU/ReLU 激活 → 非负 μ
-        return outputs                                              # 返回真正的体素空间表示
+        return outputs.float()                                      # decoder 使用 AMP；输出转回 FP32 供 volume loss/rendering 使用

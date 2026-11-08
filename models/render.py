@@ -211,6 +211,7 @@ def make_coords(volume_resolution, volume_phy, volume_origin, device):
     return xyz
 
 def predict_3d_volume(model,volume_resolution,volume_origin,volume_phy,scale,device):
+    '''生成 3D 世界坐标时显式关闭 autocas'''
     with torch.autocast(device_type=torch.device(device).type, enabled=False):
         xyz = make_coords(volume_resolution.tolist(), volume_phy.tolist(), volume_origin.tolist(), device) # 世界坐标网格保持 FP32
         xyz_sample = xyz[::scale, ::scale, ::scale, :]                                                      # 几何下采样坐标保持 FP32

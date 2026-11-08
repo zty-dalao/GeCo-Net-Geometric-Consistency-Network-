@@ -11,6 +11,7 @@ except ImportError:
 
 '''引入小波变换模块'''
 from submodel.wavelet_preprocess.wavelet_process import real_value_wavelet_transformer 
+from submodel.QWT.quave_to_real import QUAVEToRealChannels
 
 
 class trainer():
@@ -20,6 +21,7 @@ class trainer():
         self.args = args
         self.conf = conf
         self.device = device
+        self.quave_to_real = QUAVEToRealChannels(device=device)
 
         '''这里添加了AMP（自动混合精度）的初始化'''
         self.amp_enabled = str(device).startswith('cuda') and not args.no_amp
@@ -158,7 +160,10 @@ class trainer():
         
         然后将self.G_render.encoder(src_images, src_poses)中的src_images换成小波变换后的图像images_after_wavelet_transformer
         '''
-        images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
+        if self.args.wavelet_transform_module_name == "QWT":
+            images_after_wavelet_transformer = self.quave_to_real(src_images)
+        else:
+            images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
 
         # 2d projection encoding
         '''这里要修改，小波+添加amp混合精度'''
@@ -260,7 +265,11 @@ class trainer():
 
         # 2d projection encoding
         '''这里也需要进行小波变换'''
-        images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
+        if self.args.wavelet_transform_module_name == "QWT":
+            images_after_wavelet_transformer = self.quave_to_real(src_images)
+        else:
+            images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
+
         # self.G_render.encoder(src_images, src_poses)
         with self.amp_context():
             self.G_render.encoder(images_after_wavelet_transformer, src_poses)  # encoder 使用 AMP
@@ -301,7 +310,11 @@ class trainer():
 
         # 2d projection encoding
         '''这里也需要进行小波变换'''
-        images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
+        if self.args.wavelet_transform_module_name == "QWT":
+            images_after_wavelet_transformer = self.quave_to_real(src_images)
+        else:
+            images_after_wavelet_transformer = real_value_wavelet_transformer(src_images)
+
         # self.G_render.encoder(src_images, src_poses)
         with self.amp_context():
             self.G_render.encoder(images_after_wavelet_transformer, src_poses)  # encoder 使用 AMP

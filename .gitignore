@@ -4,8 +4,9 @@
 # 训练/评估产生的日志、checkpoint、可视化结果
 train/
 evaluate/
-submodel/decoder/checkpoints/
-submodel/decoder/logs/
+submodel/*/checkpoints/
+submodel/*/logs/
+submodel/*/metrics/
 
 # Python
 __pycache__/

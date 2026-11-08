@@ -27,7 +27,10 @@ def parse_args():
     parser.add_argument("--resume_name", type=str, default=None, help='resume which trained net for continue training')
     parser.add_argument("--datatype", type=str, default="dental", help="data type dental | spine | Walnuts")
     parser.add_argument("--gd1_lambda", type=float, default=1.0, help='weight for gradient loss')
-    parser.add_argument("--mse_lambda_2d", type=float, default=0.01, help='weight for projection loss')  
+    parser.add_argument("--mse_lambda_2d", type=float, default=0.01, help='weight for projection loss') 
+
+    # 小波变换模块 
+    parser.add_argument("--wavelet_transform_module_name", type=str, default="sample", help='该参数用于指明在图像的输入阶段采用哪种小波变换模块，如果时sample，则用wavelet_transformer模块，如果是QWT，则用quave_to_real_channels模块。') 
 
     args = parser.parse_args()
 
@@ -38,6 +41,9 @@ def parse_args():
     conf.put("train.G_loss.gd1_lambda", args.gd1_lambda)
     conf.put("train.G_loss.mse_lambda_2d", args.mse_lambda_2d)
 
+    # 这一行是为了在训练阶段将命令行参数传递给配置文件中的小波变换模块名称，以便在模型构建时使用正确的小波变换模块。
+    conf.put("model.wavelet_transform_module_name", args.wavelet_transform_module_name)
+    
     now = datetime.datetime.now()
     exp_state_list = [now.strftime('%Y-%m-%d %H:%M:%S'), '\n'
                      'Exp name: ' , args.name , '\n' ,
@@ -59,7 +65,10 @@ def parse_args():
                      'inplanes: ' , str(conf['model.SRGAN.generator.inplanes']) , '\n' ,
                      'mse_lambda_2d: ', str(conf['train.G_loss.mse_lambda_2d']), '\n',
                      'mse_lambda_3d: ', str(conf['train.G_loss.mse_lambda_3d']), '\n',
-                     'gd1_lambda: ', str(conf['train.G_loss.gd1_lambda']), '\n']
+                     'gd1_lambda: ', str(conf['train.G_loss.gd1_lambda']), '\n',
+
+                    #  这一行是为了在实验状态中记录小波变换模块的名称，以便在训练日志中清楚地看到使用了哪种小波变换模块。
+                     'wavelet_transform_module_name: ', str(conf['model.wavelet_transform_module_name']), '\n']
 
     exp_state = ''.join(exp_state_list) # 拼接并打印到终端（''.join(exp_state_list)）
     print(exp_state)

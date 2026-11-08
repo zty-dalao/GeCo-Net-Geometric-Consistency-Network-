@@ -1,0 +1,17 @@
+matplotlib
+munch
+numpy
+opencv_python
+pydicom
+scikit_learn
+scipy
+SimpleITK
+torch
+torchvision
+tqdm
+wandb
+pywavelets
+scipy
+imageio
+pytorch-fid
+pytorch-ignite
